@@ -4,16 +4,23 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/stanstork/stratum-api/internal/config"
+	"github.com/stanstork/stratum-api/internal/migration"
 	"github.com/stanstork/stratum-api/internal/routes"
 )
 
 func main() {
+	// Load configuration
+	cfg := config.Load()
+
+	// Run database migrations
+	migration.RunMigrations(cfg.DatabaseURL)
+
 	router := routes.NewRouter()
 
-	// Start the HTTP server
-	addr := ":8080"
-	log.Printf("Starting server on %s...", addr)
+	addr := ":" + cfg.ServerPort
+	log.Printf("Server listening on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		log.Fatalf("Server failed: %v", err)
 	}
 }

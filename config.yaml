@@ -1,0 +1,5 @@
+# Database connection URL (Postgres)
+database_url: "postgres://stratum_user:qwerty123@localhost:5432/stratum?sslmode=disable"
+
+# HTTP server port
+server_port: "8080"
