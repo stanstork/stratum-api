@@ -11,6 +11,7 @@ import (
 type Config struct {
 	DatabaseURL string `mapstructure:"database_url"`
 	ServerPort  string `mapstructure:"server_port"`
+	JWTSecret   string `mapstructure:"jwt_secret"`
 }
 
 // Load reads the configuration from a YAML file and returns a Config instance.
@@ -35,6 +36,10 @@ func Load() *Config {
 	// Fallback defaults
 	if config.ServerPort == "" {
 		config.ServerPort = "8080"
+	}
+
+	if config.JWTSecret == "" {
+		log.Fatal("JWT secret must be set in the config file")
 	}
 
 	return &config

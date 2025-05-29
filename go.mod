@@ -3,10 +3,12 @@ module github.com/stanstork/stratum-api
 go 1.24.3
 
 require (
+	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/gorilla/mux v1.8.1
 	github.com/lib/pq v1.10.9
 	github.com/pressly/goose/v3 v3.24.3
 	github.com/spf13/viper v1.20.1
+	golang.org/x/crypto v0.38.0
 )
 
 require (
