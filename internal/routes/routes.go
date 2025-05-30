@@ -8,7 +8,7 @@ import (
 )
 
 // RegisterRoutes sets up the API routes
-func NewRouter(auth *handlers.AuthHandler) *mux.Router {
+func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler) *mux.Router {
 	router := mux.NewRouter()
 
 	// Health check route
@@ -17,6 +17,16 @@ func NewRouter(auth *handlers.AuthHandler) *mux.Router {
 	// Public auth endpoints
 	router.HandleFunc("/api/signup", auth.SignUp).Methods(http.MethodPost)
 	router.HandleFunc("/api/login", auth.Login).Methods(http.MethodPost)
+
+	// Protected routes with tenant ID in context
+	api := router.PathPrefix("/api").Subrouter()
+	api.Use(auth.JWTMiddleware)
+
+	// Job management routes
+	api.HandleFunc("/jobs", job.CreateJob).Methods(http.MethodPost)
+	api.HandleFunc("/jobs", job.ListJobs).Methods(http.MethodGet)
+	api.HandleFunc("/jobs/{jobID}/run", job.RunJob).Methods(http.MethodPost)
+	api.HandleFunc("/jobs/{jobID}/status", job.GetJobStatus).Methods(http.MethodGet)
 
 	return router
 }

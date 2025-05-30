@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -79,4 +81,43 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": tokenString})
+}
+
+func (h *AuthHandler) JWTMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			http.Error(w, "Authorization header required", http.StatusUnauthorized)
+			return
+		}
+		parts := strings.SplitN(auth, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
+			return
+		}
+		tokenString := parts[1]
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return []byte(h.jwtSecret), nil
+		})
+		if err != nil || !token.Valid {
+			http.Error(w, "Invalid token: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok || !claims.VerifyExpiresAt(time.Now().Unix(), true) {
+			http.Error(w, "Token expired", http.StatusUnauthorized)
+			return
+		}
+		tenantID, ok := claims["tid"].(string)
+		if !ok {
+			http.Error(w, "Missing token claim", http.StatusUnauthorized)
+			return
+		}
+		// Store tenant ID in context for downstream handlers
+		ctx := context.WithValue(r.Context(), "tenant_id", tenantID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

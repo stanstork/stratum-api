@@ -8,6 +8,7 @@ import (
 	"github.com/stanstork/stratum-api/internal/config"
 	"github.com/stanstork/stratum-api/internal/handlers"
 	"github.com/stanstork/stratum-api/internal/migration"
+	"github.com/stanstork/stratum-api/internal/repository"
 	"github.com/stanstork/stratum-api/internal/routes"
 )
 
@@ -25,8 +26,12 @@ func main() {
 	// Init auth handler
 	authHandler := handlers.NewAuthHandler(db, cfg)
 
+	// Init job repository and handler
+	jobRepo := repository.NewJobRepository(db)
+	jobHandler := handlers.NewJobHandler(jobRepo)
+
 	// Build the router
-	router := routes.NewRouter(authHandler)
+	router := routes.NewRouter(authHandler, jobHandler)
 
 	// Start HTTP server
 	addr := ":" + cfg.ServerPort
