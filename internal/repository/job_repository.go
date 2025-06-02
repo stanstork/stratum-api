@@ -8,10 +8,15 @@ import (
 )
 
 type JobRepository interface {
+	// JobDefinition methods
 	CrateDefinition(def models.JobDefinition) (models.JobDefinition, error)
+	GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error)
+
+	// JobExecution methods
 	ListDefinitions(tenantID string) ([]models.JobDefinition, error)
 	CreateExecution(jobDefID string) (models.JobExecution, error)
 	GetLastExecution(jobDefID string) (models.JobExecution, error)
+	UpdateExecution(execID string, status string, errorMessage string, logs string) error
 }
 
 type jobRepository struct {
@@ -110,4 +115,41 @@ func (r *jobRepository) GetLastExecution(jobDefID string) (models.JobExecution, 
 		return exec, err // Other error
 	}
 	return exec, nil // Return the found execution
+}
+
+func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error) {
+	query := `
+		SELECT id, tenant_id, name, ast, source_connection, destination_connection, engine_settings, created_at, updated_at
+		FROM tenant.job_definitions
+		WHERE id = $1
+	`
+	var def models.JobDefinition
+	err := r.db.QueryRow(query, jobDefID).Scan(
+		&def.ID,
+		&def.TenantID,
+		&def.Name,
+		&def.AST,
+		&def.SourceConnection,
+		&def.DestinationConnection,
+		&def.EngineSettings,
+		&def.CreatedAt,
+		&def.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return def, errors.New("job definition not found")
+		}
+		return def, err
+	}
+	return def, nil
+}
+
+func (r *jobRepository) UpdateExecution(execID string, status string, errorMessage string, logs string) error {
+	query := `
+		UPDATE tenant.job_executions
+		SET status = $1, error_message = $2, logs = $3
+		WHERE id = $4
+	`
+	_, err := r.db.Exec(query, status, errorMessage, logs, execID)
+	return err
 }

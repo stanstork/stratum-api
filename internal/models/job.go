@@ -6,7 +6,7 @@ type JobDefinition struct {
 	ID                    string      `json:"id" db:"id"`
 	TenantID              string      `json:"tenant_id" db:"tenant_id"`
 	Name                  string      `json:"name" db:"name"`
-	AST                   interface{} `json:"ast" db:"ast"`
+	AST                   string      `json:"ast" db:"ast"`
 	SourceConnection      interface{} `json:"source_connection" db:"source_connection"`
 	DestinationConnection interface{} `json:"destination_connection" db:"destination_connection"`
 	EngineSettings        interface{} `json:"engine_settings" db:"engine_settings"`
