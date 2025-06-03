@@ -33,7 +33,7 @@ func main() {
 	router := initRouter(db, cfg)
 
 	// initialize and start the migration worker
-	_, workerCancel := initWorker(db)
+	_, workerCancel := initWorker(db, cfg.Worker)
 	defer workerCancel()
 
 	// start HTTP server and handle graceful shutdown
@@ -65,16 +65,16 @@ func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
 }
 
 // initWorker constructs, starts, and returns the worker’s context cancel function.
-func initWorker(db *sql.DB) (context.Context, context.CancelFunc) {
+func initWorker(db *sql.DB, cfg config.WorkerConfig) (context.Context, context.CancelFunc) {
 	jobRepo := repository.NewJobRepository(db)
 	workerCfg := &worker.WorkerConfig{
 		DB:                   db,
 		JobRepo:              jobRepo,
-		PollInterval:         5 * time.Second,
-		EngineImage:          "docker-image",     // Replace with actual Docker image
-		TempDir:              "/var/tmp/stratum", // Directory for temporary AST files
-		ContainerCPULimit:    1000,               // CPU limit in millicores (1000 = 1 core)
-		ContainerMemoryLimit: 512 * 1024 * 1024,  // Memory limit in bytes (512MB)
+		PollInterval:         cfg.PollInterval,
+		EngineImage:          cfg.EngineImage,
+		TempDir:              cfg.TempDir,
+		ContainerCPULimit:    cfg.ContainerCPULimit,
+		ContainerMemoryLimit: cfg.ContainerMemoryLimit,
 	}
 
 	w, err := worker.NewWorker(*workerCfg)

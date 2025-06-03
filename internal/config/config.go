@@ -2,16 +2,24 @@ package config
 
 import (
 	"log"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
-// Config holds all configurable values
-// Field tags map to YAML keys
+type WorkerConfig struct {
+	PollInterval         time.Duration `mapstructure:"poll_interval"`
+	EngineImage          string        `mapstructure:"engine_image"`
+	TempDir              string        `mapstructure:"temp_dir"`
+	ContainerCPULimit    int64         `mapstructure:"container_cpu_limit"`
+	ContainerMemoryLimit int64         `mapstructure:"container_memory_limit"`
+}
+
 type Config struct {
-	DatabaseURL string `mapstructure:"database_url"`
-	ServerPort  string `mapstructure:"server_port"`
-	JWTSecret   string `mapstructure:"jwt_secret"`
+	DatabaseURL string       `mapstructure:"database_url"`
+	ServerPort  string       `mapstructure:"server_port"`
+	JWTSecret   string       `mapstructure:"jwt_secret"`
+	Worker      WorkerConfig `mapstructure:"worker"`
 }
 
 // Load reads the configuration from a YAML file and returns a Config instance.

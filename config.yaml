@@ -6,3 +6,10 @@ server_port: "8080"
 
 # JWT secret key for signing tokens
 jwt_secret: "this_is_a_very_secret_key"
+
+worker:
+  poll_interval: "5s"  # interval for polling the database for new tasks
+  engine_image: "docker.io/stratum/engine:latest"  # docker image for the worker engine
+  temp_dir: "/var/tmp/stratum"  # directory where .smql files are written
+  container_cpu_limit: 1000             # in millicores (1000 = 1 CPU core)
+  container_memory_limit: 536870912     # in bytes (512 MB)
