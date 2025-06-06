@@ -43,14 +43,17 @@ func NewWorker(cfg WorkerConfig) (*Worker, error) {
 }
 
 func (w *Worker) Start(ctx context.Context) error {
+	log.Println("Worker started, polling for jobs...")
 	ticker := time.NewTicker(w.cfg.PollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			log.Println("Worker stopped")
 			return ctx.Err()
 		case <-ticker.C:
+			log.Println("Checking for pending jobs...")
 			if err := w.processNextPendingJob(ctx); err != nil {
 				// Log the error, but continue processing other jobs
 				log.Printf("error processing jobs: %v", err)
@@ -77,6 +80,7 @@ func (w *Worker) processNextPendingJob(ctx context.Context) error {
 	`
 	if err := tx.QueryRowContext(ctx, query).Scan(&execID, &jobDefID); err != nil {
 		if err == sql.ErrNoRows {
+			log.Println("No pending jobs found")
 			return nil // No pending jobs found
 		}
 		return fmt.Errorf("failed to fetch next pending job: %w", err)
@@ -99,6 +103,8 @@ func (w *Worker) processNextPendingJob(ctx context.Context) error {
 }
 
 func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
+	log.Printf("Running job execution %s for job definition %s", execID, jobDefID)
+
 	// Fetch job definition
 	def, err := w.cfg.JobRepo.GetJobDefinitionByID(jobDefID)
 	if err != nil {
@@ -107,24 +113,25 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	}
 
 	// Write AST to temporary file
-	tmpFileName := filepath.Join(w.cfg.TempDir, fmt.Sprintf("migration-%s-%s.smql", jobDefID, uuid.NewString()))
+	tmpFileName := filepath.Join(w.cfg.TempDir, fmt.Sprintf("migration-%s-%s.json", jobDefID, uuid.NewString()))
 	if err := os.WriteFile(tmpFileName, []byte(def.AST), 0644); err != nil {
 		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to write AST to file: %v", err), "")
 		return fmt.Errorf("failed to write AST to file: %w", err)
 	}
+	log.Printf("AST written to temporary file: %s", tmpFileName)
 	defer os.Remove(tmpFileName)
 
 	// Configure container creation arguments
 
 	// Command that the engine expects
-	cmd := []string{"--config", "/app/config.smql"}
+	cmd := []string{"migrate", "--config", "/app/config.json", "--from-ast"}
 
 	// Mounts: bind‐mount the temp file into /app/config.smql
 	mounts := []mount.Mount{
 		{
 			Type:   mount.TypeBind,
 			Source: tmpFileName,
-			Target: "/app/config.smql",
+			Target: "/app/config.json",
 		},
 	}
 
@@ -144,16 +151,24 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		Cmd:   cmd,
 	}
 
-	// Pull image if it’s not already present
-	// This ensures that if the image is not local, we pull it.
-	reader, err := w.cli.ImagePull(ctx, w.cfg.EngineImage, image.PullOptions{})
+	// Use the Docker SDK to inspect first, pull only if not found locally
+	imageName := w.cfg.EngineImage
+	_, err = w.cli.ImageInspect(ctx, imageName)
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to pull image: %v", err), "")
-		return fmt.Errorf("failed to pull image: %w", err)
-	}
+		// If not found, pull the image
+		log.Printf("Image %s not found locally, pulling...", imageName)
 
-	io.Copy(io.Discard, reader) // Discard the output of the pull operation
-	defer reader.Close()
+		// Pull the image
+		reader, err := w.cli.ImagePull(ctx, w.cfg.EngineImage, image.PullOptions{})
+		if err != nil {
+			w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to pull image: %v", err), "")
+			return fmt.Errorf("failed to pull image: %w", err)
+		}
+
+		io.Copy(io.Discard, reader) // Discard the output of the pull operation
+		defer reader.Close()
+
+	}
 
 	// Create the container
 	resp, err := w.cli.ContainerCreate(
@@ -170,6 +185,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	}
 
 	containerID := resp.ID
+	log.Printf("Container %s created", containerID)
 
 	// Start the container
 	if err := w.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
@@ -217,11 +233,14 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		exitCode := status.StatusCode
 		if exitCode != 0 {
 			w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Container exited with code %d", exitCode), mergedLogs)
+			log.Printf("Container %s exited with code %d", containerID, exitCode)
 			return fmt.Errorf("container exited with code %d", exitCode)
 		}
+		log.Printf("Container %s completed successfully", containerID)
 	}
 
 	// If we reach here, the container ran successfully
 	w.cfg.JobRepo.UpdateExecution(execID, "completed", "", mergedLogs)
+	log.Printf("Job execution %s for job definition %s completed successfully", execID, jobDefID)
 	return nil
 }
