@@ -5,12 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/google/uuid"
@@ -52,7 +53,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		case <-ticker.C:
 			if err := w.processNextPendingJob(ctx); err != nil {
 				// Log the error, but continue processing other jobs
-				fmt.Errorf("error processing jobs: %w", err)
+				log.Printf("error processing jobs: %v", err)
 			}
 		}
 	}
@@ -145,7 +146,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 
 	// Pull image if it’s not already present
 	// This ensures that if the image is not local, we pull it.
-	reader, err := w.cli.ImagePull(ctx, w.cfg.EngineImage, types.ImagePullOptions{})
+	reader, err := w.cli.ImagePull(ctx, w.cfg.EngineImage, image.PullOptions{})
 	if err != nil {
 		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to pull image: %v", err), "")
 		return fmt.Errorf("failed to pull image: %w", err)
@@ -171,14 +172,14 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	containerID := resp.ID
 
 	// Start the container
-	if err := w.cli.ContainerStart(ctx, containerID, types.ContainerStartOptions{}); err != nil {
+	if err := w.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to start container: %v", err), "")
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
 	// Stream container logs
 	// For MVP simplicity, we’ll buffer everything in one string.
-	logOpts := types.ContainerLogsOptions{
+	logOpts := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,

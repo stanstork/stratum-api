@@ -22,11 +22,11 @@ func NewJobHandler(repo repository.JobRepository) *JobHandler {
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	tid := r.Context().Value("tenant_id").(string)
 	var payload struct {
-		Name                  string `json:"name"`
-		AST                   string `json:"ast"`
-		SourceConnection      string `json:"source_connection"`
-		DestinationConnection string `json:"destination_connection"`
-		EngineSettings        string `json:"engine_settings"`
+		Name                  string          `json:"name"`
+		AST                   json.RawMessage `json:"ast"`
+		SourceConnection      string          `json:"source_connection"`
+		DestinationConnection string          `json:"destination_connection"`
+		EngineSettings        string          `json:"engine_settings"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
@@ -70,8 +70,6 @@ func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create job execution: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Placeholder: trigger POC engine asynchronously
-	// go proc.RunMigration(execution.ID)
 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(execution)

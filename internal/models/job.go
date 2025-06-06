@@ -1,17 +1,20 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type JobDefinition struct {
-	ID                    string      `json:"id" db:"id"`
-	TenantID              string      `json:"tenant_id" db:"tenant_id"`
-	Name                  string      `json:"name" db:"name"`
-	AST                   string      `json:"ast" db:"ast"`
-	SourceConnection      interface{} `json:"source_connection" db:"source_connection"`
-	DestinationConnection interface{} `json:"destination_connection" db:"destination_connection"`
-	EngineSettings        interface{} `json:"engine_settings" db:"engine_settings"`
-	CreatedAt             time.Time   `json:"created_at" db:"created_at"`
-	UpdatedAt             time.Time   `json:"updated_at" db:"updated_at"`
+	ID                    string          `json:"id" db:"id"`
+	TenantID              string          `json:"tenant_id" db:"tenant_id"`
+	Name                  string          `json:"name" db:"name"`
+	AST                   json.RawMessage `json:"ast" db:"ast"`
+	SourceConnection      interface{}     `json:"source_connection" db:"source_connection"`
+	DestinationConnection interface{}     `json:"destination_connection" db:"destination_connection"`
+	EngineSettings        interface{}     `json:"engine_settings" db:"engine_settings"`
+	CreatedAt             time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at" db:"updated_at"`
 }
 
 type JobExecution struct {
