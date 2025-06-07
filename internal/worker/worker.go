@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
 	"github.com/stanstork/stratum-api/internal/repository"
 )
@@ -104,6 +106,12 @@ func (w *Worker) processNextPendingJob(ctx context.Context) error {
 
 func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	log.Printf("Running job execution %s for job definition %s", execID, jobDefID)
+
+	// Update execution status to running
+	if _, err := w.cfg.JobRepo.UpdateExecution(execID, "running", "", ""); err != nil {
+		log.Printf("UpdateExecution execID=%s error: %v", execID, err)
+		return fmt.Errorf("failed to update execution status to running: %w", err)
+	}
 
 	// Fetch job definition
 	def, err := w.cfg.JobRepo.GetJobDefinitionByID(jobDefID)
@@ -207,20 +215,23 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	}
 	defer logReader.Close()
 
-	mergedLogs := ""
-	buf := make([]byte, 4096)
-	for {
-		n, err := logReader.Read(buf)
-		if n > 0 {
-			mergedLogs += string(buf[:n])
-		}
-		if err != nil {
-			if err == io.EOF {
-				break // End of logs
-			}
-			break // Some other error, we stop reading logs
-		}
+	var (
+		stdoutBuf = new(bytes.Buffer)
+		stderrBuf = new(bytes.Buffer)
+	)
+
+	// stdcopy will consume the multiplexed stream and write “pure” output
+	if _, err := stdcopy.StdCopy(stdoutBuf, stderrBuf, logReader); err != nil {
+		w.cfg.JobRepo.UpdateExecution(execID,
+			"failed",
+			fmt.Sprintf("Failed to demux container logs: %v", err),
+			"",
+		)
+		return fmt.Errorf("stdcopy error: %w", err)
 	}
+
+	// build mergedLogs without any NULs
+	mergedLogs := stdoutBuf.String() + stderrBuf.String()
 
 	// Wait for the container to finish
 	// This will block until the container stops running.
@@ -240,7 +251,15 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	}
 
 	// If we reach here, the container ran successfully
-	w.cfg.JobRepo.UpdateExecution(execID, "completed", "", mergedLogs)
+	n, err := w.cfg.JobRepo.UpdateExecution(execID, "succeeded", "", mergedLogs)
+	if err != nil {
+		log.Printf("UpdateExecution execID=%s error: %v", execID, err)
+	} else if n == 0 {
+		log.Printf("UpdateExecution execID=%s did not match any rows", execID)
+	} else {
+		log.Printf("Execution %s updated (%d row(s))", execID, n)
+	}
+
 	log.Printf("Job execution %s for job definition %s completed successfully", execID, jobDefID)
 	return nil
 }

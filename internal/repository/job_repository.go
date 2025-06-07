@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/stanstork/stratum-api/internal/models"
 )
@@ -16,7 +17,7 @@ type JobRepository interface {
 	ListDefinitions(tenantID string) ([]models.JobDefinition, error)
 	CreateExecution(jobDefID string) (models.JobExecution, error)
 	GetLastExecution(jobDefID string) (models.JobExecution, error)
-	UpdateExecution(execID string, status string, errorMessage string, logs string) error
+	UpdateExecution(execID string, status string, errorMessage string, logs string) (int64, error)
 }
 
 type jobRepository struct {
@@ -144,12 +145,46 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 	return def, nil
 }
 
-func (r *jobRepository) UpdateExecution(execID string, status string, errorMessage string, logs string) error {
-	query := `
-		UPDATE tenant.job_executions
-		SET status = $1, error_message = $2, logs = $3
-		WHERE id = $4
-	`
-	_, err := r.db.Exec(query, status, errorMessage, logs, execID)
-	return err
+func (r *jobRepository) UpdateExecution(
+	execID, status, errorMessage, logs string,
+) (int64, error) {
+	var (
+		query string
+		args  []interface{}
+	)
+
+	switch status {
+	case "running":
+		query = `
+            UPDATE tenant.job_executions
+               SET status          = $1,
+                   run_started_at  = NOW(),
+                   updated_at      = NOW(),
+                   error_message   = NULL,
+                   logs            = NULL
+             WHERE id = $2
+        `
+		args = []interface{}{status, execID}
+
+	case "succeeded", "failed":
+		query = `
+            UPDATE tenant.job_executions
+               SET status             = $1,
+                   run_completed_at   = NOW(),
+                   updated_at         = NOW(),
+                   error_message      = NULLIF($2, ''),
+                   logs               = NULLIF($3, '')
+             WHERE id = $4
+        `
+		args = []interface{}{status, errorMessage, logs, execID}
+
+	default:
+		return 0, fmt.Errorf("invalid status %q", status)
+	}
+
+	res, err := r.db.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

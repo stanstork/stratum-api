@@ -18,13 +18,13 @@ type JobDefinition struct {
 }
 
 type JobExecution struct {
-	ID              string      `json:"id" db:"id"`
-	JobDefinitionID string      `json:"job_definition_id" db:"job_definition_id"`
-	Status          string      `json:"status" db:"status"`
-	CreatedAt       time.Time   `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time   `json:"updated_at" db:"updated_at"`
-	RunStartedAt    *time.Time  `json:"run_started_at" db:"run_started_at"`
-	RunCompletedAt  *time.Time  `json:"run_completed_at" db:"run_completed_at"`
-	ErrorMessage    *string     `json:"error_message" db:"error_message"`
-	Logs            interface{} `json:"logs" db:"logs"`
+	ID              string     `json:"id" db:"id"`
+	JobDefinitionID string     `json:"job_definition_id" db:"job_definition_id"`
+	Status          string     `json:"status" db:"status"`
+	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+	RunStartedAt    *time.Time `json:"run_started_at" db:"run_started_at"`
+	RunCompletedAt  *time.Time `json:"run_completed_at" db:"run_completed_at"`
+	ErrorMessage    *string    `json:"error_message" db:"error_message"`
+	Logs            *string    `json:"logs" db:"logs"`
 }

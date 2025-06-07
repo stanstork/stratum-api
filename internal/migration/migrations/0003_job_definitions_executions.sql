@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS tenant.job_executions (
   run_started_at TIMESTAMPTZ,
   run_completed_at TIMESTAMPTZ,
   error_message TEXT,
-  logs JSONB
+  logs TEXT
 );
 
 -- Triggers to maintain updated_at
