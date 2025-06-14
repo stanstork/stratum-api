@@ -10,7 +10,7 @@ import (
 
 type UserRepository interface {
 	CreateUser(tenantID, email, password string) (models.User, error)
-	AuthenticateUser(tenantID, email, password string) (models.User, error)
+	AuthenticateUser(email, password string) (models.User, error)
 }
 
 type userRepository struct {
@@ -43,11 +43,11 @@ func (u *userRepository) CreateUser(tenantID string, email string, password stri
 	return user, nil
 }
 
-func (u *userRepository) AuthenticateUser(tenantID string, email string, password string) (models.User, error) {
+func (u *userRepository) AuthenticateUser(email string, password string) (models.User, error) {
 	var user models.User
 
-	query := `SELECT id, tenant_id, email, password_hash, is_active FROM tenant.users WHERE tenant_id = $1 AND email = $2`
-	err := u.db.QueryRow(query, tenantID, email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.IsActive)
+	query := `SELECT id, tenant_id, email, password_hash, is_active FROM tenant.users WHERE email = $1`
+	err := u.db.QueryRow(query, email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.IsActive)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.User{}, errors.New("invalid credentials")
@@ -62,9 +62,6 @@ func (u *userRepository) AuthenticateUser(tenantID string, email string, passwor
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return models.User{}, errors.New("invalid credentials")
 	}
-
-	user.TenantID = tenantID
-	user.Email = email
 
 	return user, nil
 }

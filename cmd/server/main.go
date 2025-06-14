@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	h "github.com/gorilla/handlers"
 	"github.com/stanstork/stratum-api/internal/config"
 	"github.com/stanstork/stratum-api/internal/handlers"
 	"github.com/stanstork/stratum-api/internal/migration"
@@ -32,12 +33,23 @@ func main() {
 	// initialize HTTP handlers and router
 	router := initRouter(db, cfg)
 
+	// set up CORS options
+	corsOpts := []h.CORSOption{
+		h.AllowedOrigins([]string{"http://localhost:3000"}),
+		h.AllowedMethods([]string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),
+		h.AllowedHeaders([]string{"Content-Type", "Authorization"}),
+		h.AllowCredentials(),
+	}
+
+	// wrap router with the CORS middleware
+	corsHandler := h.CORS(corsOpts...)(router)
+
 	// initialize and start the migration worker
 	_, workerCancel := initWorker(db, cfg.Worker)
 	defer workerCancel()
 
 	// start HTTP server and handle graceful shutdown
-	startServer(router, cfg.ServerPort, workerCancel)
+	startServer(corsHandler, cfg.ServerPort, workerCancel)
 
 	log.Println("Application terminated.")
 }

@@ -26,7 +26,6 @@ type signupRequest struct {
 }
 
 type loginRequest struct {
-	TenantID string `json:"tenant_id"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -62,7 +61,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.userRepository.AuthenticateUser(req.TenantID, req.Email, req.Password)
+	user, err := h.userRepository.AuthenticateUser(req.Email, req.Password)
 	if err != nil {
 		http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
 		return
