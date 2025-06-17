@@ -18,6 +18,7 @@ type JobRepository interface {
 	CreateExecution(jobDefID string) (models.JobExecution, error)
 	GetLastExecution(jobDefID string) (models.JobExecution, error)
 	UpdateExecution(execID string, status string, errorMessage string, logs string) (int64, error)
+	ListExecutions(limit, offset int) ([]models.JobExecution, error)
 }
 
 type jobRepository struct {
@@ -187,4 +188,70 @@ func (r *jobRepository) UpdateExecution(
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution, error) {
+	const query = `
+        SELECT
+            id,
+            job_definition_id,
+            status,
+            created_at,
+            updated_at,
+            run_started_at,
+            run_completed_at,
+            error_message,
+            logs
+        FROM tenant.job_executions
+        ORDER BY created_at DESC
+        LIMIT $1
+        OFFSET $2
+    `
+	rows, err := r.db.Query(query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	executions := make([]models.JobExecution, 0, limit)
+	for rows.Next() {
+		var e models.JobExecution
+		var runStarted sql.NullTime
+		var runCompleted sql.NullTime
+		var errMsg sql.NullString
+		var logs sql.NullString
+
+		if err := rows.Scan(
+			&e.ID,
+			&e.JobDefinitionID,
+			&e.Status,
+			&e.CreatedAt,
+			&e.UpdatedAt,
+			&runStarted,
+			&runCompleted,
+			&errMsg,
+			&logs,
+		); err != nil {
+			return nil, err
+		}
+
+		if runStarted.Valid {
+			e.RunStartedAt = &runStarted.Time
+		}
+		if runCompleted.Valid {
+			e.RunCompletedAt = &runCompleted.Time
+		}
+		if errMsg.Valid {
+			e.ErrorMessage = &errMsg.String
+		}
+		if logs.Valid {
+			e.Logs = &logs.String
+		}
+
+		executions = append(executions, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return executions, nil
 }
