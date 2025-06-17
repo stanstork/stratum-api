@@ -111,3 +111,21 @@ func (h *JobHandler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(executions)
 }
+
+func (h *JobHandler) GetExecutionStats(w http.ResponseWriter, r *http.Request) {
+	days := 31 // default to 31 days
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil {
+			days = v
+		}
+	}
+
+	stats, err := h.repo.ListExecutionStats(days)
+	if err != nil {
+		http.Error(w, "Failed to get execution stats: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}

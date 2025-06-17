@@ -28,6 +28,7 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler) *mux.Router
 	api.HandleFunc("/jobs/{jobID}/run", job.RunJob).Methods(http.MethodPost)
 	api.HandleFunc("/jobs/{jobID}/status", job.GetJobStatus).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/executions", job.ListExecutions).Methods(http.MethodGet)
+	api.HandleFunc("/jobs/executions/stats", job.GetExecutionStats).Methods(http.MethodGet)
 
 	return router
 }

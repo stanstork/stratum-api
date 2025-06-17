@@ -19,6 +19,7 @@ type JobRepository interface {
 	GetLastExecution(jobDefID string) (models.JobExecution, error)
 	UpdateExecution(execID string, status string, errorMessage string, logs string) (int64, error)
 	ListExecutions(limit, offset int) ([]models.JobExecution, error)
+	ListExecutionStats(days int) (models.ExecutionStat, error)
 }
 
 type jobRepository struct {
@@ -254,4 +255,76 @@ func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution
 		return nil, err
 	}
 	return executions, nil
+}
+
+func (r *jobRepository) ListExecutionStats(days int) (models.ExecutionStat, error) {
+	const query = `
+		WITH days AS (
+			SELECT generate_series(
+				(current_date - ($1 - 1) * INTERVAL '1 day'),
+				current_date,
+				'1 day'::INTERVAL
+			) AS day
+		)
+		SELECT
+			days.day,
+			COALESCE(SUM((je.status = 'succeeded')::int), 0)   AS succeeded,
+			COALESCE(SUM((je.status = 'failed')::int), 0)      AS failed,
+			COALESCE(SUM((je.status = 'running')::int), 0)     AS running,
+			COALESCE(SUM((je.status = 'pending')::int), 0)     AS pending
+		FROM days
+		LEFT JOIN tenant.job_executions je
+		ON je.created_at::DATE = days.day
+		GROUP BY days.day
+		ORDER BY days.day;
+	`
+
+	rows, err := r.db.Query(query, days)
+	if err != nil {
+		return models.ExecutionStat{}, fmt.Errorf("ListExecutionStats query error: %w", err)
+	}
+	defer rows.Close()
+
+	var perDay []models.ExecutionStatDay
+	for rows.Next() {
+		var stat models.ExecutionStatDay
+		if err := rows.Scan(&stat.Day, &stat.Succeeded, &stat.Failed, &stat.Running, &stat.Pending); err != nil {
+			return models.ExecutionStat{}, fmt.Errorf("failed to scan execution stat: %w", err)
+		}
+		perDay = append(perDay, stat)
+	}
+
+	const totalQuery = `
+		SELECT
+			COALESCE(COUNT(*), 0) AS total,
+			COALESCE(SUM((status = 'succeeded')::int), 0) AS succeeded,
+			COALESCE(SUM((status = 'failed')::int), 0)    AS failed,
+			COALESCE(SUM((status = 'running')::int), 0)   AS running
+		FROM tenant.job_executions;
+	`
+
+	var stats models.ExecutionStat
+	row := r.db.QueryRow(totalQuery)
+	if err := row.Scan(&stats.Total, &stats.Succeeded, &stats.Failed, &stats.Running); err != nil {
+		return models.ExecutionStat{}, fmt.Errorf("GetExecutionStats total scan error: %w", err)
+	}
+
+	const defQuery = `
+		SELECT COALESCE(COUNT(*), 0) FROM tenant.job_definitions;
+	`
+	var totalDefinitions int
+	row = r.db.QueryRow(defQuery)
+	if err := row.Scan(&totalDefinitions); err != nil {
+		return models.ExecutionStat{}, fmt.Errorf("GetExecutionStats total definitions scan error: %w", err)
+	}
+
+	if stats.Total > 0 {
+		stats.SuccessRate = float64(stats.Succeeded) / float64(stats.Total) * 100.0
+	} else {
+		stats.SuccessRate = 0.0 // Avoid division by zero
+	}
+	stats.PerDay = perDay
+	stats.TotalDefinitions = totalDefinitions
+
+	return stats, nil
 }
