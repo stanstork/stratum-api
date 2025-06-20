@@ -73,7 +73,9 @@ func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
 	authHandler := handlers.NewAuthHandler(db, cfg)
 	jobRepo := repository.NewJobRepository(db)
 	jobHandler := handlers.NewJobHandler(jobRepo)
-	return routes.NewRouter(authHandler, jobHandler)
+	connHandler := handlers.NewConnectionHandler(cfg.Worker.EngineImage)
+
+	return routes.NewRouter(authHandler, jobHandler, connHandler)
 }
 
 // initWorker constructs, starts, and returns the worker’s context cancel function.

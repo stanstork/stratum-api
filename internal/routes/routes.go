@@ -8,7 +8,7 @@ import (
 )
 
 // RegisterRoutes sets up the API routes
-func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler) *mux.Router {
+func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handlers.ConnectionHandler) *mux.Router {
 	router := mux.NewRouter()
 
 	// Health check route
@@ -29,6 +29,9 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler) *mux.Router
 	api.HandleFunc("/jobs/{jobID}/status", job.GetJobStatus).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/executions", job.ListExecutions).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/executions/stats", job.GetExecutionStats).Methods(http.MethodGet)
+
+	// Connection management routes
+	api.HandleFunc("/connections/test", conn.TestConnection).Methods(http.MethodPost)
 
 	return router
 }
