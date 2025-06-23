@@ -10,6 +10,7 @@ import (
 type WorkerConfig struct {
 	PollInterval         time.Duration `mapstructure:"poll_interval"`
 	EngineImage          string        `mapstructure:"engine_image"`
+	EngineContainer      string        `mapstructure:"engine_container"`
 	TempDir              string        `mapstructure:"temp_dir"`
 	ContainerCPULimit    int64         `mapstructure:"container_cpu_limit"`
 	ContainerMemoryLimit int64         `mapstructure:"container_memory_limit"`

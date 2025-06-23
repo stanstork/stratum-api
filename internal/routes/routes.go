@@ -32,6 +32,11 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 
 	// Connection management routes
 	api.HandleFunc("/connections/test", conn.TestConnection).Methods(http.MethodPost)
+	api.HandleFunc("/connections", conn.List).Methods(http.MethodGet)
+	api.HandleFunc("/connections", conn.Create).Methods(http.MethodPost)
+	api.HandleFunc("/connections/{id}", conn.Get).Methods(http.MethodGet)
+	api.HandleFunc("/connections/{id}", conn.Update).Methods(http.MethodPut)
+	api.HandleFunc("/connections/{id}", conn.Delete).Methods(http.MethodDelete)
 
 	return router
 }

@@ -55,7 +55,6 @@ func (w *Worker) Start(ctx context.Context) error {
 			log.Println("Worker stopped")
 			return ctx.Err()
 		case <-ticker.C:
-			log.Println("Checking for pending jobs...")
 			if err := w.processNextPendingJob(ctx); err != nil {
 				// Log the error, but continue processing other jobs
 				log.Printf("error processing jobs: %v", err)
@@ -82,7 +81,6 @@ func (w *Worker) processNextPendingJob(ctx context.Context) error {
 	`
 	if err := tx.QueryRowContext(ctx, query).Scan(&execID, &jobDefID); err != nil {
 		if err == sql.ErrNoRows {
-			log.Println("No pending jobs found")
 			return nil // No pending jobs found
 		}
 		return fmt.Errorf("failed to fetch next pending job: %w", err)

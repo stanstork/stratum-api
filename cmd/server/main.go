@@ -13,6 +13,7 @@ import (
 	h "github.com/gorilla/handlers"
 	"github.com/stanstork/stratum-api/internal/config"
 	"github.com/stanstork/stratum-api/internal/handlers"
+	"github.com/stanstork/stratum-api/internal/middleware"
 	"github.com/stanstork/stratum-api/internal/migration"
 	"github.com/stanstork/stratum-api/internal/repository"
 	"github.com/stanstork/stratum-api/internal/routes"
@@ -32,6 +33,9 @@ func main() {
 
 	// initialize HTTP handlers and router
 	router := initRouter(db, cfg)
+
+	// set up logging middleware
+	router = middleware.LoggingMiddleware(router)
 
 	// set up CORS options
 	corsOpts := []h.CORSOption{
@@ -70,10 +74,12 @@ func initDatabase(cfg *config.Config) *sql.DB {
 
 // initRouter sets up authentication, job handlers, and returns the HTTP router.
 func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
-	authHandler := handlers.NewAuthHandler(db, cfg)
 	jobRepo := repository.NewJobRepository(db)
+	connRepo := repository.NewConnectionRepository(db)
+
+	authHandler := handlers.NewAuthHandler(db, cfg)
 	jobHandler := handlers.NewJobHandler(jobRepo)
-	connHandler := handlers.NewConnectionHandler(cfg.Worker.EngineImage)
+	connHandler := handlers.NewConnectionHandler(connRepo, cfg.Worker.EngineContainer)
 
 	return routes.NewRouter(authHandler, jobHandler, connHandler)
 }
