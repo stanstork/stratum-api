@@ -8,7 +8,7 @@ import (
 )
 
 // RegisterRoutes sets up the API routes
-func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handlers.ConnectionHandler) *mux.Router {
+func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handlers.ConnectionHandler, meta *handlers.MetadataHandler) *mux.Router {
 	router := mux.NewRouter()
 
 	// Health check route
@@ -37,6 +37,9 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 	api.HandleFunc("/connections/{id}", conn.Get).Methods(http.MethodGet)
 	api.HandleFunc("/connections/{id}", conn.Update).Methods(http.MethodPut)
 	api.HandleFunc("/connections/{id}", conn.Delete).Methods(http.MethodDelete)
+
+	// Metadata routes
+	api.HandleFunc("/connections/{id}/metadata", meta.GetSourceMetadata).Methods(http.MethodGet)
 
 	return router
 }
