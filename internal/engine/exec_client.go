@@ -64,7 +64,7 @@ func SaveSourceMetadata(ctx context.Context, dockerClient *client.Client, contai
 			fmt.Sprintf(
 				// ensure parent dir exists, then run CLI
 				"mkdir -p $(dirname %[1]s) && :> %[1]s && stratum source info --conn-str %[3]s --format %[2]s --output %[1]s",
-				outputPath, conn.DataFormat, conn.ConnString,
+				outputPath, conn.DataFormat, conn.GenerateConnString(),
 			),
 		},
 		AttachStdout: true,
