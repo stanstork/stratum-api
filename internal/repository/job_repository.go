@@ -14,7 +14,7 @@ type JobRepository interface {
 	GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error)
 
 	// JobExecution methods
-	ListDefinitions(tenantID string) ([]models.JobDefinition, error)
+	ListDefinitions() ([]models.JobDefinition, error)
 	CreateExecution(jobDefID string) (models.JobExecution, error)
 	GetLastExecution(jobDefID string) (models.JobExecution, error)
 	UpdateExecution(execID string, status string, errorMessage string, logs string) (int64, error)
@@ -32,29 +32,38 @@ func NewJobRepository(db *sql.DB) JobRepository {
 
 func (r *jobRepository) CrateDefinition(def models.JobDefinition) (models.JobDefinition, error) {
 	query := `
-		INSERT INTO tenant.job_definitions (tenant_id, name, ast, source_connection, destination_connection, engine_settings)
+		INSERT INTO tenant.job_definitions (tenant_id, name, description, ast, source_connection_id, destination_connection_id)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at, updated_at
 	`
 	err := r.db.QueryRow(query,
 		def.TenantID,
 		def.Name,
+		def.Description,
 		def.AST,
-		def.SourceConnection,
-		def.DestinationConnection,
-		def.EngineSettings,
+		def.SourceConnectionID,
+		def.DestinationConnectionID,
 	).Scan(&def.ID, &def.CreatedAt, &def.UpdatedAt)
 
 	return def, err
 }
 
-func (r *jobRepository) ListDefinitions(tenantID string) ([]models.JobDefinition, error) {
+func (r *jobRepository) ListDefinitions() ([]models.JobDefinition, error) {
 	query := `
-		SELECT id, tenant_id, name, ast, source_connection, destination_connection, engine_settings, created_at, updated_at
-		FROM tenant.job_definitions
-		WHERE tenant_id = $1
+		SELECT
+			jd.id, jd.tenant_id, jd.name, jd.description, jd.ast,
+			jd.source_connection_id, jd.destination_connection_id,
+			sc.id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at,
+			dc.id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at,
+			jd.created_at, jd.updated_at
+		FROM tenant.job_definitions jd
+		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
+		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
+		ORDER BY jd.created_at DESC;
 	`
-	rows, err := r.db.Query(query, tenantID)
+
+	// TODO: Add tenant filtering
+	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -63,9 +72,35 @@ func (r *jobRepository) ListDefinitions(tenantID string) ([]models.JobDefinition
 	var definitions []models.JobDefinition
 	for rows.Next() {
 		var def models.JobDefinition
-		if err := rows.Scan(&def.ID, &def.TenantID, &def.Name, &def.AST,
-			&def.SourceConnection, &def.DestinationConnection,
-			&def.EngineSettings, &def.CreatedAt, &def.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&def.ID,
+			&def.TenantID,
+			&def.Name,
+			&def.Description,
+			&def.AST,
+			&def.SourceConnectionID,
+			&def.DestinationConnectionID,
+			&def.SourceConnection.ID,
+			&def.SourceConnection.Name,
+			&def.SourceConnection.DataFormat,
+			&def.SourceConnection.Host,
+			&def.SourceConnection.Port,
+			&def.SourceConnection.Username,
+			&def.SourceConnection.DBName,
+			&def.SourceConnection.CreatedAt,
+			&def.SourceConnection.UpdatedAt,
+			&def.DestinationConnection.ID,
+			&def.DestinationConnection.Name,
+			&def.DestinationConnection.DataFormat,
+			&def.DestinationConnection.Host,
+			&def.DestinationConnection.Port,
+			&def.DestinationConnection.Username,
+			&def.DestinationConnection.DBName,
+			&def.DestinationConnection.CreatedAt,
+			&def.DestinationConnection.UpdatedAt,
+			&def.CreatedAt,
+			&def.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		definitions = append(definitions, def)
@@ -122,9 +157,16 @@ func (r *jobRepository) GetLastExecution(jobDefID string) (models.JobExecution, 
 
 func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error) {
 	query := `
-		SELECT id, tenant_id, name, ast, source_connection, destination_connection, engine_settings, created_at, updated_at
-		FROM tenant.job_definitions
-		WHERE id = $1
+		SELECT
+			jd.id, jd.tenant_id, jd.name, jd.description, jd.ast,
+			jd.source_connection_id, jd.destination_connection_id,
+			sc.id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at,
+			dc.id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at,
+			jd.created_at, jd.updated_at
+		FROM tenant.job_definitions jd
+		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
+		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
+		WHERE jd.id = $1;
 	`
 	var def models.JobDefinition
 	err := r.db.QueryRow(query, jobDefID).Scan(
@@ -134,7 +176,6 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 		&def.AST,
 		&def.SourceConnection,
 		&def.DestinationConnection,
-		&def.EngineSettings,
 		&def.CreatedAt,
 		&def.UpdatedAt,
 	)

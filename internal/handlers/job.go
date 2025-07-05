@@ -23,23 +23,23 @@ func NewJobHandler(repo repository.JobRepository) *JobHandler {
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	tid := r.Context().Value("tenant_id").(string)
 	var payload struct {
-		Name                  string          `json:"name"`
-		AST                   json.RawMessage `json:"ast"`
-		SourceConnection      string          `json:"source_connection"`
-		DestinationConnection string          `json:"destination_connection"`
-		EngineSettings        string          `json:"engine_settings"`
+		Name                    string          `json:"name"`
+		Description             string          `json:"description"`
+		AST                     json.RawMessage `json:"ast"`
+		SourceConnectionID      string          `json:"source_connection_id"`
+		DestinationConnectionID string          `json:"destination_connection_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 	definition := models.JobDefinition{
-		TenantID:              tid,
-		Name:                  payload.Name,
-		AST:                   payload.AST,
-		SourceConnection:      payload.SourceConnection,
-		DestinationConnection: payload.DestinationConnection,
-		EngineSettings:        payload.EngineSettings,
+		TenantID:                tid,
+		Name:                    payload.Name,
+		Description:             payload.Description,
+		AST:                     payload.AST,
+		SourceConnectionID:      payload.SourceConnectionID,
+		DestinationConnectionID: payload.DestinationConnectionID,
 	}
 	createdDef, err := h.repo.CrateDefinition(definition)
 	if err != nil {
@@ -52,8 +52,8 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
-	tid := r.Context().Value("tenant_id").(string)
-	definitions, err := h.repo.ListDefinitions(tid)
+	// tid := r.Context().Value("tenant_id").(string)
+	definitions, err := h.repo.ListDefinitions()
 	if err != nil {
 		http.Error(w, "Failed to list job definitions: "+err.Error(), http.StatusInternalServerError)
 		return
