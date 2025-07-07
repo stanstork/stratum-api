@@ -50,68 +50,90 @@ func TestConnectionByExec(ctx context.Context, dockerClient *client.Client, cont
 }
 
 func SaveSourceMetadata(ctx context.Context, dockerClient *client.Client, containerName string, conn models.Connection) ([]byte, error) {
-	if conn.Status != "valid" {
-		return nil, fmt.Errorf("connection is not valid: %s", conn.Status)
-	}
-
-	// TODO: make output path configurable and unique per request
-	// For now, we use a fixed path in the container
 	outputPath := "/tmp/source_metadata.json"
+
+	command := fmt.Sprintf(
+		// Ensure parent dir exists, then run the CLI command
+		"mkdir -p $(dirname %[1]s) && stratum source info --conn-str '%[3]s' --format %[2]s --output %[1]s",
+		outputPath,
+		conn.DataFormat,
+		conn.GenerateConnString(),
+	)
+	println("Executing command in container:", command)
 
 	execConfig := container.ExecOptions{
 		Cmd: []string{
 			"sh", "-c",
 			fmt.Sprintf(
-				// ensure parent dir exists, then run CLI
-				"mkdir -p $(dirname %[1]s) && :> %[1]s && stratum source info --conn-str %[3]s --format %[2]s --output %[1]s",
-				outputPath, conn.DataFormat, conn.GenerateConnString(),
+				// Ensure parent dir exists, then run the CLI command
+				"mkdir -p $(dirname %[1]s) && stratum source info --conn-str '%[3]s' --format %[2]s --output %[1]s",
+				outputPath,
+				conn.DataFormat,
+				conn.GenerateConnString(),
 			),
 		},
 		AttachStdout: true,
 		AttachStderr: true,
 	}
+
 	execResp, err := dockerClient.ContainerExecCreate(ctx, containerName, execConfig)
 	if err != nil {
-		return nil, fmt.Errorf("create exec: %w", err)
+		return nil, fmt.Errorf("failed to create exec in container: %w", err)
 	}
 
 	attachResp, err := dockerClient.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("attach exec: %w", err)
+		return nil, fmt.Errorf("failed to attach to exec in container: %w", err)
 	}
 	defer attachResp.Close()
 
+	// IMPORTANT: Wait for the command to finish.
+	// We can drain the output to ensure completion.
+	var stderrBuf bytes.Buffer
+	// The output from Stdout will be empty because we redirect it to a file.
+	// We still need to copy it to allow the command to finish.
+	_, err = io.Copy(io.Discard, attachResp.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("error while waiting for command to finish: %w", err)
+	}
+	// It's good practice to also read Stderr to help with debugging.
+	io.Copy(&stderrBuf, attachResp.Reader)
+
+	// Now that the command has finished, inspect the exit code.
 	insp, err := dockerClient.ContainerExecInspect(ctx, execResp.ID)
 	if err != nil {
-		return nil, fmt.Errorf("inspect exec: %w", err)
-	}
-	if insp.ExitCode != 0 {
-		return nil, fmt.Errorf("exec failed with exit code %d", insp.ExitCode)
+		return nil, fmt.Errorf("failed to inspect exec in container: %w", err)
 	}
 
-	// Copy the output file from the container
+	if insp.ExitCode != 0 {
+		return nil, fmt.Errorf("exec command failed with exit code %d: %s", insp.ExitCode, stderrBuf.String())
+	}
+
+	// The command has completed successfully, so the file should exist.
 	reader, _, err := dockerClient.CopyFromContainer(ctx, containerName, outputPath)
 	if err != nil {
-		return nil, fmt.Errorf("copy from container: %w", err)
+		return nil, fmt.Errorf("failed to copy file from container: %w", err)
 	}
 	defer reader.Close()
 
 	tr := tar.NewReader(reader)
-	target := path.Base(outputPath)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, fmt.Errorf("reading tar: %w", err)
-		}
-		if hdr.Typeflag == tar.TypeReg && hdr.Name == target {
-			var buf bytes.Buffer
-			if _, err := io.Copy(&buf, tr); err != nil {
-				return nil, fmt.Errorf("extracting file: %w", err)
-			}
-			return buf.Bytes(), nil
-		}
+	hdr, err := tr.Next() // We expect only one file in the archive
+	if err == io.EOF {
+		return nil, fmt.Errorf("archive from container is empty")
 	}
-	return nil, fmt.Errorf("file %q not found in archive", outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read tar header from container: %w", err)
+	}
+
+	// Check if the file in the archive is the one we want.
+	if hdr.Name != path.Base(outputPath) {
+		return nil, fmt.Errorf("expected file %q but found %q in archive", path.Base(outputPath), hdr.Name)
+	}
+
+	var fileContent bytes.Buffer
+	if _, err := io.Copy(&fileContent, tr); err != nil {
+		return nil, fmt.Errorf("failed to extract file from archive: %w", err)
+	}
+
+	return fileContent.Bytes(), nil
 }

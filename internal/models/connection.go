@@ -25,7 +25,7 @@ func (c *Connection) GenerateConnString() string {
 		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
 			c.Username, c.Password, c.Host, c.Port, c.DBName)
 	case "mysql":
-		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s",
+		return fmt.Sprintf("mysql://%s:%s@%s:%d/%s",
 			c.Username, c.Password, c.Host, c.Port, c.DBName)
 	default:
 		return fmt.Sprintf("unknown format: %s", c.DataFormat)
