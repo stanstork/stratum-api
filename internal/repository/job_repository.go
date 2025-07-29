@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/stanstork/stratum-api/internal/models"
 )
@@ -12,9 +13,10 @@ type JobRepository interface {
 	// JobDefinition methods
 	CrateDefinition(def models.JobDefinition) (models.JobDefinition, error)
 	GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error)
+	ListDefinitions() ([]models.JobDefinition, error)
+	DeleteDefinition(jobDefID string) error
 
 	// JobExecution methods
-	ListDefinitions() ([]models.JobDefinition, error)
 	CreateExecution(jobDefID string) (models.JobExecution, error)
 	GetLastExecution(jobDefID string) (models.JobExecution, error)
 	UpdateExecution(execID string, status string, errorMessage string, logs string) (int64, error)
@@ -186,6 +188,28 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 		return def, err
 	}
 	return def, nil
+}
+
+func (r *jobRepository) DeleteDefinition(jobDefID string) error {
+	query := `
+		DELETE FROM tenant.job_definitions
+		WHERE id = $1;
+	`
+	res, err := r.db.Exec(query, jobDefID)
+	if err != nil {
+		log.Printf("Error deleting job definition %s: %v", jobDefID, err)
+		return fmt.Errorf("failed to delete job definition: %w", err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		log.Printf("Error getting rows affected for job definition %s: %v", jobDefID, err)
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		log.Printf("No job definition found with ID %s", jobDefID)
+		return errors.New("job definition not found")
+	}
+	return nil
 }
 
 func (r *jobRepository) UpdateExecution(

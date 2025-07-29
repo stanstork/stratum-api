@@ -42,6 +42,7 @@ func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Format == "" || req.DSN == "" {
+		log.Println("Format and DSN are required for testing connection")
 		http.Error(w, "Format and DSN are required", http.StatusBadRequest)
 		return
 	}
@@ -56,6 +57,49 @@ func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Reques
 	} else {
 		w.WriteHeader(http.StatusOK)
 		resp["status"] = "ok"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	conn, err := h.repo.Get(id)
+	if err != nil {
+		log.Printf("Failed to get connection with ID %s: %v", id, err)
+		http.Error(w, "Failed to get connection: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conn == nil {
+		log.Printf("Connection with ID %s not found", id)
+		http.Error(w, "Connection not found", http.StatusNotFound)
+		return
+	}
+
+	logs, err := engine.TestConnectionByExec(r.Context(), h.dockerClient, h.containerName, conn.DataFormat, conn.GenerateConnString())
+	resp := map[string]string{"logs": ansi.ReplaceAllString(logs, "")}
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		resp["error"] = ansi.ReplaceAllString(err.Error(), "")
+	} else {
+		w.WriteHeader(http.StatusOK)
+		resp["status"] = "ok"
+	}
+
+	log.Printf("Tested connection %s: %s", id, resp["logs"])
+
+	if resp["status"] == "ok" {
+		conn.Status = "valid"
+	} else {
+		conn.Status = "invalid"
+	}
+	_, err = h.repo.Update(conn)
+	if err != nil {
+		log.Printf("Failed to update connection status for %s: %v", id, err)
+		http.Error(w, "Failed to update connection status: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

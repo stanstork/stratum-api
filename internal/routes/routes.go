@@ -25,6 +25,7 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 	// Job management routes
 	api.HandleFunc("/jobs", job.CreateJob).Methods(http.MethodPost)
 	api.HandleFunc("/jobs", job.ListJobs).Methods(http.MethodGet)
+	api.HandleFunc("/jobs/{jobID}", job.DelteJob).Methods(http.MethodDelete)
 	api.HandleFunc("/jobs/{jobID}/run", job.RunJob).Methods(http.MethodPost)
 	api.HandleFunc("/jobs/{jobID}/status", job.GetJobStatus).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/executions", job.ListExecutions).Methods(http.MethodGet)
@@ -32,6 +33,7 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 
 	// Connection management routes
 	api.HandleFunc("/connections/test", conn.TestConnection).Methods(http.MethodPost)
+	api.HandleFunc("/connections/{id}/test", conn.TestConnectionByID).Methods(http.MethodPost)
 	api.HandleFunc("/connections", conn.List).Methods(http.MethodGet)
 	api.HandleFunc("/connections", conn.Create).Methods(http.MethodPost)
 	api.HandleFunc("/connections/{id}", conn.Get).Methods(http.MethodGet)

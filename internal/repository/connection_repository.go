@@ -178,18 +178,19 @@ func (r *connectionRepository) Update(conn *models.Connection) (*models.Connecti
 UPDATE tenant.connections
 SET name = $1,
     data_format = $2,
-    host = $3,
-    port = $4,
-    username = $5,
-    password = $6,
-    db_name = $7,
+	status = $3,
+    host = $4,
+    port = $5,
+    username = $6,
+    password = $7,
+    db_name = $8,
     updated_at = now()
-WHERE id = $8
+WHERE id = $9
 RETURNING created_at, updated_at;
 `
 	if err := r.db.QueryRow(
 		q,
-		conn.Name, conn.DataFormat,
+		conn.Name, conn.DataFormat, conn.Status,
 		conn.Host, conn.Port, conn.Username, encPwd, conn.DBName,
 		conn.ID,
 	).Scan(&conn.CreatedAt, &conn.UpdatedAt); err != nil {

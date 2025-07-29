@@ -62,6 +62,16 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(definitions)
 }
 
+func (h *JobHandler) DelteJob(w http.ResponseWriter, r *http.Request) {
+	jobDefID := mux.Vars(r)["jobID"]
+
+	if err := h.repo.DeleteDefinition(jobDefID); err != nil {
+		http.Error(w, "Failed to delete job definition: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
 	// tid := r.Context().Value("tenant_id").(string)
 	jobDefID := mux.Vars(r)["jobID"]
