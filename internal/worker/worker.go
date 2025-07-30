@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	"github.com/stanstork/stratum-api/internal/repository"
 )
 
@@ -57,7 +58,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		case <-ticker.C:
 			if err := w.processNextPendingJob(ctx); err != nil {
 				// Log the error, but continue processing other jobs
-				log.Printf("error processing jobs: %v", err)
+				log.Printf("error processing jobs: \n%+v\n", err)
 			}
 		}
 	}
@@ -108,14 +109,14 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	// Update execution status to running
 	if _, err := w.cfg.JobRepo.UpdateExecution(execID, "running", "", ""); err != nil {
 		log.Printf("UpdateExecution execID=%s error: %v", execID, err)
-		return fmt.Errorf("failed to update execution status to running: %w", err)
+		return errors.Wrap(err, "failed to update execution status to running")
 	}
 
 	// Fetch job definition
 	def, err := w.cfg.JobRepo.GetJobDefinitionByID(jobDefID)
 	if err != nil {
 		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to fetch job definition: %v", err), "")
-		return fmt.Errorf("failed to fetch job definition: %w", err)
+		return errors.Wrap(err, "failed to fetch job definition")
 	}
 
 	// Write AST to temporary file
