@@ -77,7 +77,13 @@ func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	logs, err := engine.TestConnectionByExec(r.Context(), h.dockerClient, h.containerName, conn.DataFormat, conn.GenerateConnString())
+	conn_str, err := conn.GenerateConnString()
+	if err != nil {
+		log.Printf("Failed to generate connection string for %s: %v", id, err)
+		http.Error(w, "Failed to generate connection string: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	logs, err := engine.TestConnectionByExec(r.Context(), h.dockerClient, h.containerName, conn.DataFormat, conn_str)
 	resp := map[string]string{"logs": ansi.ReplaceAllString(logs, "")}
 
 	if err != nil {

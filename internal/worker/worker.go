@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +21,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stanstork/stratum-api/internal/repository"
 )
+
+var dataFormatMap = map[string]string{
+	"pg":         "Postgres",
+	"postgresql": "Postgres",
+	"postgres":   "Postgres",
+	"mysql":      "MySql",
+}
 
 type WorkerConfig struct {
 	DB                   *sql.DB
@@ -121,9 +129,51 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 
 	// Write AST to temporary file
 	tmpFileName := filepath.Join(w.cfg.TempDir, fmt.Sprintf("migration-%s-%s.json", jobDefID, uuid.NewString()))
-	if err := os.WriteFile(tmpFileName, []byte(def.AST), 0644); err != nil {
+
+	// Parse the AST and ensure it has the necessary connections
+	var ast map[string]interface{}
+	if err := json.Unmarshal(def.AST, &ast); err != nil {
+		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to parse AST: %v", err), "")
+		return errors.Wrap(err, "failed to parse AST from job definition")
+	}
+	if ast == nil {
+		return errors.New("AST is empty or invalid")
+	}
+
+	source_conn_str, err := def.SourceConnection.GenerateConnString()
+	if err != nil {
+		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to generate source connection string: %v", err), "")
+		return errors.Wrap(err, "failed to generate source connection string")
+	}
+	dest_conn_str, err := def.DestinationConnection.GenerateConnString()
+	if err != nil {
+		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to generate destination connection string: %v", err), "")
+		return errors.Wrap(err, "failed to generate destination connection string")
+	}
+
+	ast["connections"] = map[string]interface{}{
+		"source": map[string]interface{}{
+			"conn_type": "Source",
+			"format":    dataFormatMap[def.SourceConnection.DataFormat],
+			"conn_str":  source_conn_str,
+		},
+		"destination": map[string]interface{}{
+			"conn_type": "Dest",
+			"format":    dataFormatMap[def.DestinationConnection.DataFormat],
+			"conn_str":  dest_conn_str,
+		},
+	}
+
+	log.Printf("AST for job definition %s: %+v", jobDefID, ast)
+
+	astBytes, err := json.Marshal(ast)
+	if err != nil {
+		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to marshal AST: %v", err), "")
+		return errors.Wrap(err, "failed to marshal AST to JSON")
+	}
+	if err := os.WriteFile(tmpFileName, astBytes, 0644); err != nil {
 		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to write AST to file: %v", err), "")
-		return fmt.Errorf("failed to write AST to file: %w", err)
+		return errors.Wrapf(err, "failed to write AST to temporary file %s", tmpFileName)
 	}
 	log.Printf("AST written to temporary file: %s", tmpFileName)
 	defer os.Remove(tmpFileName)

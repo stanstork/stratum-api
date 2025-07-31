@@ -58,12 +58,16 @@ func TestConnectionByExec(ctx context.Context, dockerClient *client.Client, cont
 func SaveSourceMetadata(ctx context.Context, dockerClient *client.Client, containerName string, conn models.Connection) ([]byte, error) {
 	outputPath := "/tmp/source_metadata.json"
 
+	conn_str, err := conn.GenerateConnString()
+	if err != nil {
+		return nil, fmt.Errorf("generate connection string: %w", err)
+	}
 	command := fmt.Sprintf(
 		// Ensure parent dir exists, then run the CLI command
 		"mkdir -p $(dirname %[1]s) && stratum source info --conn-str '%[3]s' --format %[2]s --output %[1]s",
 		outputPath,
 		conn.DataFormat,
-		conn.GenerateConnString(),
+		conn_str,
 	)
 	println("Executing command in container:", command)
 
@@ -75,9 +79,8 @@ func SaveSourceMetadata(ctx context.Context, dockerClient *client.Client, contai
 				"mkdir -p $(dirname %[1]s) && stratum source info --conn-str '%[3]s' --format %[2]s --output %[1]s",
 				outputPath,
 				conn.DataFormat,
-				conn.GenerateConnString(),
-			),
-		},
+				conn_str,
+			)},
 		AttachStdout: true,
 		AttachStderr: true,
 	}

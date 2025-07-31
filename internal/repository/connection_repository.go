@@ -1,16 +1,11 @@
 package repository
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"fmt"
-	"io"
-	"os"
 
 	"github.com/stanstork/stratum-api/internal/models"
+	"github.com/stanstork/stratum-api/internal/utils"
 )
 
 type ConnectionRepository interface {
@@ -27,68 +22,6 @@ type connectionRepository struct {
 
 func NewConnectionRepository(db *sql.DB) ConnectionRepository {
 	return &connectionRepository{db: db}
-}
-
-// encryptionKey loads a 32-byte key from environment variable STRATUM_ENC_KEY.
-func encryptionKey() ([]byte, error) {
-	b64 := os.Getenv("STRATUM_ENC_KEY")
-	if b64 == "" {
-		return nil, fmt.Errorf("encryption key not set")
-	}
-	key, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid base64 key: %w", err)
-	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("encryption key must be 32 bytes")
-	}
-	return key, nil
-}
-
-func encryptPassword(plain string) ([]byte, error) {
-	key, err := encryptionKey()
-	if err != nil {
-		return nil, err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plain), nil)
-	return ciphertext, nil
-}
-
-func decryptPassword(data []byte) (string, error) {
-	key, err := encryptionKey()
-	if err != nil {
-		return "", err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return "", fmt.Errorf("ciphertext too short")
-	}
-	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
-	plain, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", err
-	}
-	return string(plain), nil
 }
 
 func (r *connectionRepository) List() ([]*models.Connection, error) {
@@ -114,7 +47,7 @@ ORDER BY name;
 		); err != nil {
 			return nil, err
 		}
-		pwd, err := decryptPassword(encPwd)
+		pwd, err := utils.DecryptPassword(encPwd)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt password: %w", err)
 		}
@@ -139,7 +72,7 @@ WHERE id = $1;
 	); err != nil {
 		return &c, err
 	}
-	pwd, err := decryptPassword(encPwd)
+	pwd, err := utils.DecryptPassword(encPwd)
 	if err != nil {
 		return &c, fmt.Errorf("decrypt password: %w", err)
 	}
@@ -148,7 +81,7 @@ WHERE id = $1;
 }
 
 func (r *connectionRepository) Create(conn *models.Connection) (*models.Connection, error) {
-	encPwd, err := encryptPassword(conn.Password)
+	encPwd, err := utils.EncryptPassword(conn.Password)
 	if err != nil {
 		return conn, fmt.Errorf("encrypt password: %w", err)
 	}
@@ -170,7 +103,7 @@ RETURNING id, created_at, updated_at;
 }
 
 func (r *connectionRepository) Update(conn *models.Connection) (*models.Connection, error) {
-	encPwd, err := encryptPassword(conn.Password)
+	encPwd, err := utils.EncryptPassword(conn.Password)
 	if err != nil {
 		return conn, fmt.Errorf("encrypt password: %w", err)
 	}
