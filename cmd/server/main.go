@@ -88,9 +88,11 @@ func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
 // initWorker constructs, starts, and returns the worker’s context cancel function.
 func initWorker(db *sql.DB, cfg config.WorkerConfig) (context.Context, context.CancelFunc) {
 	jobRepo := repository.NewJobRepository(db)
+	connRepo := repository.NewConnectionRepository(db)
 	workerCfg := &worker.WorkerConfig{
 		DB:                   db,
 		JobRepo:              jobRepo,
+		ConnRepo:             connRepo,
 		PollInterval:         cfg.PollInterval,
 		EngineImage:          cfg.EngineImage,
 		TempDir:              cfg.TempDir,

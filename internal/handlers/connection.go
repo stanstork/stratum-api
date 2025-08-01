@@ -119,6 +119,10 @@ func (h *ConnectionHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for i := range connections {
+		connections[i].Password = "" // Omit password in response for security
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(connections); err != nil {
 		http.Error(w, "Failed to encode response: "+err.Error(), http.StatusInternalServerError)
@@ -136,6 +140,8 @@ func (h *ConnectionHandler) Get(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Connection not found", http.StatusNotFound)
 		return
 	}
+
+	conn.Password = "" // Omit password in response for security
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(conn); err != nil {

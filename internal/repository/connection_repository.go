@@ -64,19 +64,13 @@ FROM tenant.connections
 WHERE id = $1;
 `
 	var c models.Connection
-	var encPwd []byte
 	if err := r.db.QueryRow(q, id).Scan(
 		&c.ID, &c.Name, &c.DataFormat,
-		&c.Host, &c.Port, &c.Username, &encPwd, &c.DBName,
+		&c.Host, &c.Port, &c.Username, &c.Password, &c.DBName,
 		&c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return &c, err
 	}
-	pwd, err := utils.DecryptPassword(encPwd)
-	if err != nil {
-		return &c, fmt.Errorf("decrypt password: %w", err)
-	}
-	c.Password = pwd
 	return &c, nil
 }
 

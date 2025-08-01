@@ -32,6 +32,7 @@ var dataFormatMap = map[string]string{
 type WorkerConfig struct {
 	DB                   *sql.DB
 	JobRepo              repository.JobRepository
+	ConnRepo             repository.ConnectionRepository
 	PollInterval         time.Duration
 	EngineImage          string
 	TempDir              string
@@ -127,6 +128,18 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		return errors.Wrap(err, "failed to fetch job definition")
 	}
 
+	source_conn, err := w.cfg.ConnRepo.Get(def.SourceConnectionID)
+	if err != nil {
+		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to fetch source connection: %v", err), "")
+		return errors.Wrap(err, "failed to fetch source connection")
+	}
+
+	dest_conn, err := w.cfg.ConnRepo.Get(def.DestinationConnectionID)
+	if err != nil {
+		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to fetch destination connection: %v", err), "")
+		return errors.Wrap(err, "failed to fetch destination connection")
+	}
+
 	// Write AST to temporary file
 	tmpFileName := filepath.Join(w.cfg.TempDir, fmt.Sprintf("migration-%s-%s.json", jobDefID, uuid.NewString()))
 
@@ -140,12 +153,12 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		return errors.New("AST is empty or invalid")
 	}
 
-	source_conn_str, err := def.SourceConnection.GenerateConnString()
+	source_conn_str, err := source_conn.GenerateConnString()
 	if err != nil {
 		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to generate source connection string: %v", err), "")
 		return errors.Wrap(err, "failed to generate source connection string")
 	}
-	dest_conn_str, err := def.DestinationConnection.GenerateConnString()
+	dest_conn_str, err := dest_conn.GenerateConnString()
 	if err != nil {
 		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to generate destination connection string: %v", err), "")
 		return errors.Wrap(err, "failed to generate destination connection string")
@@ -157,7 +170,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 			"format":    dataFormatMap[def.SourceConnection.DataFormat],
 			"conn_str":  source_conn_str,
 		},
-		"destination": map[string]interface{}{
+		"dest": map[string]interface{}{
 			"conn_type": "Dest",
 			"format":    dataFormatMap[def.DestinationConnection.DataFormat],
 			"conn_str":  dest_conn_str,

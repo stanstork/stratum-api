@@ -24,9 +24,9 @@ type Connection struct {
 func (c *Connection) GenerateConnString() (string, error) {
 	password, err := utils.DecryptPassword([]byte(c.Password))
 	if err != nil {
-		return "", fmt.Errorf("failed to decrypt password: %v", err)
+		return "", fmt.Errorf("decrypt password: %w", err)
 	}
-	c.Password = password // Update the password field with decrypted value
+	c.Password = string(password)
 	switch c.DataFormat {
 	case "pg", "postgresql", "postgres":
 		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
