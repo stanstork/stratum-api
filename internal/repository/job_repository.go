@@ -22,6 +22,7 @@ type JobRepository interface {
 	UpdateExecution(execID string, status string, errorMessage string, logs string) (int64, error)
 	ListExecutions(limit, offset int) ([]models.JobExecution, error)
 	ListExecutionStats(days int) (models.ExecutionStat, error)
+	GetExecution(execID string) (models.JobExecution, error)
 }
 
 type jobRepository struct {
@@ -411,4 +412,31 @@ func (r *jobRepository) ListExecutionStats(days int) (models.ExecutionStat, erro
 	stats.TotalDefinitions = totalDefinitions
 
 	return stats, nil
+}
+
+func (r *jobRepository) GetExecution(execID string) (models.JobExecution, error) {
+	query := `
+		SELECT id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs
+		FROM tenant.job_executions
+		WHERE id = $1;
+	`
+	var exec models.JobExecution
+	err := r.db.QueryRow(query, execID).Scan(
+		&exec.ID,
+		&exec.JobDefinitionID,
+		&exec.Status,
+		&exec.CreatedAt,
+		&exec.UpdatedAt,
+		&exec.RunStartedAt,
+		&exec.RunCompletedAt,
+		&exec.ErrorMessage,
+		&exec.Logs,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return exec, errors.New("execution not found")
+		}
+		return exec, err
+	}
+	return exec, nil
 }

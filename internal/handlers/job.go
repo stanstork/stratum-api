@@ -139,3 +139,25 @@ func (h *JobHandler) GetExecutionStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
+
+func (h *JobHandler) GetJobDefinition(w http.ResponseWriter, r *http.Request) {
+	jobDefID := mux.Vars(r)["jobID"]
+	definition, err := h.repo.GetJobDefinitionByID(jobDefID)
+	if err != nil {
+		http.Error(w, "Failed to get job definition: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(definition)
+}
+
+func (h *JobHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
+	execID := mux.Vars(r)["execID"]
+	execution, err := h.repo.GetExecution(execID)
+	if err != nil {
+		http.Error(w, "Failed to get job execution: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(execution)
+}

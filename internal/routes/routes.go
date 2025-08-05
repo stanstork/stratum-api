@@ -9,7 +9,7 @@ import (
 
 // RegisterRoutes sets up the API routes
 func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handlers.ConnectionHandler, meta *handlers.MetadataHandler) *mux.Router {
-	router := mux.NewRouter()
+	router := mux.NewRouter().StrictSlash(true)
 
 	// Health check route
 	router.HandleFunc("/health", handlers.HealthCheck).Methods(http.MethodGet)
@@ -22,14 +22,23 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 	api := router.PathPrefix("/api").Subrouter()
 	api.Use(auth.JWTMiddleware)
 
-	// Job management routes
+	// Base "/jobs" routes
 	api.HandleFunc("/jobs", job.CreateJob).Methods(http.MethodPost)
 	api.HandleFunc("/jobs", job.ListJobs).Methods(http.MethodGet)
+
+	// Specific sub-paths of "/jobs/..." MUST come BEFORE dynamic "/jobs/{jobID}"
+
+	// Most specific "/jobs/executions/..." route first
+	api.HandleFunc("/jobs/executions/stats", job.GetExecutionStats).Methods(http.MethodGet)
+
+	// Parent "/jobs/executions" route next
+	api.HandleFunc("/jobs/executions", job.ListExecutions).Methods(http.MethodGet)
+	api.HandleFunc("/jobs/executions/{execID}", job.GetExecution).Methods(http.MethodGet)
+
 	api.HandleFunc("/jobs/{jobID}", job.DelteJob).Methods(http.MethodDelete)
+	api.HandleFunc("/jobs/{jobID}", job.GetJobDefinition).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/{jobID}/run", job.RunJob).Methods(http.MethodPost)
 	api.HandleFunc("/jobs/{jobID}/status", job.GetJobStatus).Methods(http.MethodGet)
-	api.HandleFunc("/jobs/executions", job.ListExecutions).Methods(http.MethodGet)
-	api.HandleFunc("/jobs/executions/stats", job.GetExecutionStats).Methods(http.MethodGet)
 
 	// Connection management routes
 	api.HandleFunc("/connections/test", conn.TestConnection).Methods(http.MethodPost)
