@@ -163,8 +163,8 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 		SELECT
 			jd.id, jd.tenant_id, jd.name, jd.description, jd.ast,
 			jd.source_connection_id, jd.destination_connection_id,
-			sc.id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at,
-			dc.id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at,
+			sc.id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at, sc.status,
+			dc.id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at, dc.status,
 			jd.created_at, jd.updated_at
 		FROM tenant.job_definitions jd
 		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
@@ -189,6 +189,7 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 		&def.SourceConnection.DBName,
 		&def.SourceConnection.CreatedAt,
 		&def.SourceConnection.UpdatedAt,
+		&def.SourceConnection.Status,
 		&def.DestinationConnection.ID,
 		&def.DestinationConnection.Name,
 		&def.DestinationConnection.DataFormat,
@@ -198,6 +199,7 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 		&def.DestinationConnection.DBName,
 		&def.DestinationConnection.CreatedAt,
 		&def.DestinationConnection.UpdatedAt,
+		&def.DestinationConnection.Status,
 		&def.CreatedAt,
 		&def.UpdatedAt,
 	)
