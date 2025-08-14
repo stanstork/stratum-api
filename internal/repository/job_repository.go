@@ -23,6 +23,7 @@ type JobRepository interface {
 	ListExecutions(limit, offset int) ([]models.JobExecution, error)
 	ListExecutionStats(days int) (models.ExecutionStat, error)
 	GetExecution(execID string) (models.JobExecution, error)
+	SetExecutionComplete(execID string, status string, recordsProcessed int64, bytesTransferred int64) error
 }
 
 type jobRepository struct {
@@ -131,7 +132,7 @@ func (r *jobRepository) CreateExecution(jobDefID string) (models.JobExecution, e
 
 func (r *jobRepository) GetLastExecution(jobDefID string) (models.JobExecution, error) {
 	query := `
-		SELECT id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs
+		SELECT id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs, records_processed, bytes_transferred
 		FROM tenant.job_executions
 		WHERE job_definition_id = $1
 		ORDER BY created_at DESC
@@ -148,6 +149,8 @@ func (r *jobRepository) GetLastExecution(jobDefID string) (models.JobExecution, 
 		&exec.RunCompletedAt,
 		&exec.ErrorMessage,
 		&exec.Logs,
+		&exec.RecordsProcessed,
+		&exec.BytesTransferred,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -289,7 +292,9 @@ func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution
             run_started_at,
             run_completed_at,
             error_message,
-            logs
+            logs,
+            records_processed,
+            bytes_transferred
         FROM tenant.job_executions
         ORDER BY created_at DESC
         LIMIT $1
@@ -319,6 +324,8 @@ func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution
 			&runCompleted,
 			&errMsg,
 			&logs,
+			&e.RecordsProcessed,
+			&e.BytesTransferred,
 		); err != nil {
 			return nil, err
 		}
@@ -418,7 +425,7 @@ func (r *jobRepository) ListExecutionStats(days int) (models.ExecutionStat, erro
 
 func (r *jobRepository) GetExecution(execID string) (models.JobExecution, error) {
 	query := `
-		SELECT id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs
+		SELECT id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs, records_processed, bytes_transferred
 		FROM tenant.job_executions
 		WHERE id = $1;
 	`
@@ -433,6 +440,8 @@ func (r *jobRepository) GetExecution(execID string) (models.JobExecution, error)
 		&exec.RunCompletedAt,
 		&exec.ErrorMessage,
 		&exec.Logs,
+		&exec.RecordsProcessed,
+		&exec.BytesTransferred,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -441,4 +450,14 @@ func (r *jobRepository) GetExecution(execID string) (models.JobExecution, error)
 		return exec, err
 	}
 	return exec, nil
+}
+
+func (r *jobRepository) SetExecutionComplete(execID string, status string, recordsProcessed int64, bytesTransferred int64) error {
+	query := `
+		UPDATE tenant.job_executions
+		SET status = $1, run_completed_at = NOW(), records_processed = $2, bytes_transferred = $3
+		WHERE id = $4;
+	`
+	_, err := r.db.Exec(query, status, recordsProcessed, bytesTransferred, execID)
+	return err
 }

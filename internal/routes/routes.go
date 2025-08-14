@@ -34,6 +34,7 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 	// Parent "/jobs/executions" route next
 	api.HandleFunc("/jobs/executions", job.ListExecutions).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/executions/{execID}", job.GetExecution).Methods(http.MethodGet)
+	api.HandleFunc("/jobs/executions/{execID}/complete", job.SetExecutionComplete).Methods(http.MethodPost)
 
 	api.HandleFunc("/jobs/{jobID}", job.DelteJob).Methods(http.MethodDelete)
 	api.HandleFunc("/jobs/{jobID}", job.GetJobDefinition).Methods(http.MethodGet)

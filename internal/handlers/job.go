@@ -161,3 +161,21 @@ func (h *JobHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(execution)
 }
+
+func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request) {
+	execID := mux.Vars(r)["execID"]
+	var req struct {
+		Status           string `json:"status"`
+		RecordsProcessed int64  `json:"records_processed"`
+		BytesTransferred int64  `json:"bytes_transferred"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Failed to decode request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.repo.SetExecutionComplete(execID, req.Status, req.RecordsProcessed, req.BytesTransferred); err != nil {
+		http.Error(w, "Failed to set execution complete: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
