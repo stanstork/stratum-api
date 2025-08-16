@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/stanstork/stratum-api/internal/repository"
@@ -35,6 +37,7 @@ type WorkerConfig struct {
 	ConnRepo             repository.ConnectionRepository
 	PollInterval         time.Duration
 	EngineImage          string
+	JWTSigningKey        []byte
 	TempDir              string
 	ContainerCPULimit    int64 // CPU limit in millicores (e.g., 1000 millicores = 1 CPU core)
 	ContainerMemoryLimit int64 // Memory limit in bytes (e.g., 512 * 1024 * 1024 for 512MB)
@@ -196,6 +199,28 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	// Command that the engine expects
 	cmd := []string{"migrate", "--config", "/app/config.json", "--from-ast"}
 
+	authToken, err := generateJobToken(execID, def.TenantID, w.cfg.JWTSigningKey)
+	if err != nil {
+		// Update execution status to failed
+		w.cfg.JobRepo.UpdateExecution(execID, "failed", "Failed to generate auth token", "")
+		return errors.Wrap(err, "failed to generate auth token for container")
+	}
+
+	hostIP, err := getOutboundIP()
+	if err != nil {
+		log.Printf("Could not get host IP: %v", err)
+		// Handle error appropriately, maybe fallback or fail
+		hostIP = "localhost" // Fallback might not work from container
+	}
+
+	hostCallbackURL := fmt.Sprintf("http://%s:8080/api/jobs/executions/%s/complete", hostIP, execID)
+
+	// Environment variables
+	envVars := []string{
+		fmt.Sprintf("REPORT_CALLBACK_URL=%s", hostCallbackURL),
+		fmt.Sprintf("AUTH_TOKEN=%s", authToken),
+	}
+
 	// Mounts: bind‐mount the temp file into /app/config.smql
 	mounts := []mount.Mount{
 		{
@@ -219,6 +244,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	containerConfig := &container.Config{
 		Image: w.cfg.EngineImage,
 		Cmd:   cmd,
+		Env:   envVars,
 	}
 
 	// Use the Docker SDK to inspect first, pull only if not found locally
@@ -309,19 +335,60 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 			log.Printf("Container %s exited with code %d", containerID, exitCode)
 			return fmt.Errorf("container exited with code %d", exitCode)
 		}
-		log.Printf("Container %s completed successfully", containerID)
-	}
 
-	// If we reach here, the container ran successfully
-	n, err := w.cfg.JobRepo.UpdateExecution(execID, "succeeded", "", mergedLogs)
-	if err != nil {
-		log.Printf("UpdateExecution execID=%s error: %v", execID, err)
-	} else if n == 0 {
-		log.Printf("UpdateExecution execID=%s did not match any rows", execID)
-	} else {
-		log.Printf("Execution %s updated (%d row(s))", execID, n)
+		log.Printf("Container %s completed successfully. Waiting for engine report...", containerID)
+
+		// Give the engine's API call a few seconds to arrive.
+		time.Sleep(5 * time.Second)
+
+		// Re-fetch the execution to see if the callback updated it.
+		exec, err := w.cfg.JobRepo.GetExecution(execID)
+		if err != nil {
+			log.Printf("Failed to re-fetch execution %s after run: %v", execID, err)
+			// We can't be sure of the status, so we don't update it.
+			return errors.Wrap(err, "failed to re-fetch execution after run")
+		}
+
+		// Check if the status is still "running".
+		if exec.Status == "running" {
+			// The callback did not arrive in time. The worker takes responsibility.
+			log.Printf("Engine report for %s did not arrive in time. Marking as succeeded without metrics.", execID)
+			w.cfg.JobRepo.UpdateExecution(execID, "succeeded", "", mergedLogs)
+		} else {
+			// The callback was successful and updated the status.
+			log.Printf("Execution %s status was successfully set to '%s' by engine report.", execID, exec.Status)
+			// Save logs
+			w.cfg.JobRepo.UpdateExecution(execID, exec.Status, "", mergedLogs)
+		}
 	}
 
 	log.Printf("Job execution %s for job definition %s completed successfully", execID, jobDefID)
 	return nil
+}
+
+func getOutboundIP() (string, error) {
+	// This doesn't actually send a packet. It just asks the kernel
+	// which local interface it would use to reach this destination.
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP.String(), nil
+}
+
+func generateJobToken(execID string, tenantID string, signingKey []byte) (string, error) {
+	claims := jwt.MapClaims{
+		"sub": execID,
+		"tid": tenantID,
+		"aud": "job-worker",
+		"iss": "job-orchestrator",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(signingKey)
 }

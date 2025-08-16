@@ -49,7 +49,7 @@ func main() {
 	corsHandler := h.CORS(corsOpts...)(router)
 
 	// initialize and start the migration worker
-	_, workerCancel := initWorker(db, cfg.Worker)
+	_, workerCancel := initWorker(db, *cfg)
 	defer workerCancel()
 
 	// start HTTP server and handle graceful shutdown
@@ -86,18 +86,19 @@ func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
 }
 
 // initWorker constructs, starts, and returns the worker’s context cancel function.
-func initWorker(db *sql.DB, cfg config.WorkerConfig) (context.Context, context.CancelFunc) {
+func initWorker(db *sql.DB, cfg config.Config) (context.Context, context.CancelFunc) {
 	jobRepo := repository.NewJobRepository(db)
 	connRepo := repository.NewConnectionRepository(db)
 	workerCfg := &worker.WorkerConfig{
 		DB:                   db,
 		JobRepo:              jobRepo,
 		ConnRepo:             connRepo,
-		PollInterval:         cfg.PollInterval,
-		EngineImage:          cfg.EngineImage,
-		TempDir:              cfg.TempDir,
-		ContainerCPULimit:    cfg.ContainerCPULimit,
-		ContainerMemoryLimit: cfg.ContainerMemoryLimit,
+		PollInterval:         cfg.Worker.PollInterval,
+		EngineImage:          cfg.Worker.EngineImage,
+		JWTSigningKey:        []byte(cfg.JWTSecret),
+		TempDir:              cfg.Worker.TempDir,
+		ContainerCPULimit:    cfg.Worker.ContainerCPULimit,
+		ContainerMemoryLimit: cfg.Worker.ContainerMemoryLimit,
 	}
 
 	w, err := worker.NewWorker(*workerCfg)
