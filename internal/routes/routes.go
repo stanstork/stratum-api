@@ -36,6 +36,7 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 	api.HandleFunc("/jobs/executions/{execID}", job.GetExecution).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/executions/{execID}/complete", job.SetExecutionComplete).Methods(http.MethodPost)
 
+	api.HandleFunc("/jobs/stats", job.ListJobDefinitionsWithStats).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/{jobID}", job.DelteJob).Methods(http.MethodDelete)
 	api.HandleFunc("/jobs/{jobID}", job.GetJobDefinition).Methods(http.MethodGet)
 	api.HandleFunc("/jobs/{jobID}/run", job.RunJob).Methods(http.MethodPost)

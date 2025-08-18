@@ -15,6 +15,7 @@ type JobRepository interface {
 	GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error)
 	ListDefinitions() ([]models.JobDefinition, error)
 	DeleteDefinition(jobDefID string) error
+	ListJobDefinitionsWithStats() ([]models.JobDefinitionStat, error)
 
 	// JobExecution methods
 	CreateExecution(jobDefID string) (models.JobExecution, error)
@@ -460,4 +461,91 @@ func (r *jobRepository) SetExecutionComplete(execID string, status string, recor
 	`
 	_, err := r.db.Exec(query, status, recordsProcessed, bytesTransferred, execID)
 	return err
+}
+
+// Retrieves all job definitions along with their execution stats.
+func (r *jobRepository) ListJobDefinitionsWithStats() ([]models.JobDefinitionStat, error) {
+	const query = `
+		WITH ranked_executions AS (
+		SELECT
+			job_definition_id,
+			status,
+			bytes_transferred,
+			EXTRACT(EPOCH FROM (run_completed_at - run_started_at)) AS duration_seconds,
+			ROW_NUMBER() OVER(PARTITION BY job_definition_id ORDER BY created_at DESC) as run_rank
+		FROM
+			tenant.job_executions
+		)
+		SELECT
+			jd.id, jd.tenant_id, jd.name, jd.description,
+			jd.source_connection_id, jd.destination_connection_id,
+			sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.status,
+			dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.status,
+			jd.created_at, jd.updated_at,
+		COALESCE(stats.total_runs, 0) AS total_runs,
+		stats.last_run_status,
+		COALESCE(stats.total_bytes_transferred, 0) AS total_bytes_transferred,
+		stats.avg_duration_seconds
+		FROM
+		tenant.job_definitions jd
+		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
+		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
+		LEFT JOIN (
+		SELECT
+			job_definition_id,
+			COUNT(*) AS total_runs,
+			MAX(CASE WHEN run_rank = 1 THEN status END) AS last_run_status,
+			SUM(bytes_transferred) AS total_bytes_transferred,
+			AVG(duration_seconds) AS avg_duration_seconds
+		FROM
+			ranked_executions
+		GROUP BY
+			job_definition_id
+		) stats ON jd.id = stats.job_definition_id
+		ORDER BY
+		jd.created_at DESC;
+	`
+
+	results := []models.JobDefinitionStat{}
+	rows, err := r.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var stat models.JobDefinitionStat
+		if err := rows.Scan(
+			&stat.JobDefinition.ID,
+			&stat.JobDefinition.TenantID,
+			&stat.JobDefinition.Name,
+			&stat.JobDefinition.Description,
+			&stat.JobDefinition.SourceConnectionID,
+			&stat.JobDefinition.DestinationConnectionID,
+			&stat.JobDefinition.SourceConnection.Name,
+			&stat.JobDefinition.SourceConnection.DataFormat,
+			&stat.JobDefinition.SourceConnection.Host,
+			&stat.JobDefinition.SourceConnection.Port,
+			&stat.JobDefinition.SourceConnection.Username,
+			&stat.JobDefinition.SourceConnection.DBName,
+			&stat.JobDefinition.SourceConnection.Status,
+			&stat.JobDefinition.DestinationConnection.Name,
+			&stat.JobDefinition.DestinationConnection.DataFormat,
+			&stat.JobDefinition.DestinationConnection.Host,
+			&stat.JobDefinition.DestinationConnection.Port,
+			&stat.JobDefinition.DestinationConnection.Username,
+			&stat.JobDefinition.DestinationConnection.DBName,
+			&stat.JobDefinition.DestinationConnection.Status,
+			&stat.JobDefinition.CreatedAt,
+			&stat.JobDefinition.UpdatedAt,
+			&stat.TotalRuns,
+			&stat.LastRunStatus,
+			&stat.TotalBytesTransferred,
+			&stat.AvgDurationSeconds); err != nil {
+			return nil, err
+		}
+		results = append(results, stat)
+	}
+
+	return results, nil
 }

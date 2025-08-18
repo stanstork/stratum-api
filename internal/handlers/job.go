@@ -179,3 +179,13 @@ func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *JobHandler) ListJobDefinitionsWithStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.repo.ListJobDefinitionsWithStats()
+	if err != nil {
+		http.Error(w, "Failed to get job definition stats: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}

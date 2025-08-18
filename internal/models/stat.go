@@ -21,3 +21,13 @@ type ExecutionStat struct {
 	TotalDefinitions int                `json:"total_definitions" db:"total_definitions"`
 	PerDay           []ExecutionStatDay `json:"per_day" db:"per_day"`
 }
+
+type JobDefinitionStat struct {
+	JobDefinition
+
+	// Calculated statistics fields
+	TotalRuns             int64    `db:"total_runs" json:"total_runs"`
+	LastRunStatus         *string  `db:"last_run_status" json:"last_run_status"`
+	TotalBytesTransferred int64    `db:"total_bytes_transferred" json:"total_bytes_transferred"`
+	AvgDurationSeconds    *float64 `db:"avg_duration_seconds" json:"avg_duration_seconds"`
+}
