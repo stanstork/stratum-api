@@ -22,7 +22,7 @@ type testConnRequest struct {
 
 type ConnectionHandler struct {
 	repo          repository.ConnectionRepository
-	dockerClient  *client.Client
+	engineClient  *engine.Client
 	containerName string
 }
 
@@ -31,7 +31,10 @@ func NewConnectionHandler(repo repository.ConnectionRepository, containerName st
 	if err != nil {
 		panic("Failed to create Docker client: " + err.Error())
 	}
-	return &ConnectionHandler{dockerClient: dockerClient, containerName: containerName, repo: repo}
+
+	dr := engine.NewDockerRunner(dockerClient)
+	cli := engine.NewClient(dr, containerName)
+	return &ConnectionHandler{engineClient: cli, containerName: containerName, repo: repo}
 }
 
 func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +50,7 @@ func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	logs, err := engine.TestConnectionByExec(r.Context(), h.dockerClient, h.containerName, req.Format, req.DSN)
+	logs, err := h.engineClient.TestConnection(r.Context(), req.Format, req.DSN)
 	resp := map[string]string{"logs": ansi.ReplaceAllString(logs, "")}
 
 	if err != nil {
@@ -83,7 +86,7 @@ func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Failed to generate connection string: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	logs, err := engine.TestConnectionByExec(r.Context(), h.dockerClient, h.containerName, conn.DataFormat, conn_str)
+	logs, err := h.engineClient.TestConnection(r.Context(), conn.DataFormat, conn_str)
 	resp := map[string]string{"logs": ansi.ReplaceAllString(logs, "")}
 
 	if err != nil {

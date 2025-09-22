@@ -40,7 +40,9 @@ func (h *MetadataHandler) GetSourceMetadata(w http.ResponseWriter, r *http.Reque
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	data, err := engine.SaveSourceMetadata(ctx, h.dockerClient, h.containerName, *conn)
+	dr := engine.NewDockerRunner(h.dockerClient)
+	cli := engine.NewClient(dr, h.containerName)
+	data, err := cli.SaveSourceMetadata(ctx, *conn)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
