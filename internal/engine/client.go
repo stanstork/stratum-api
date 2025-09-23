@@ -57,7 +57,7 @@ func (c *Client) SaveSourceMetadata(ctx context.Context, conn models.Connection)
 	return c.Runner.CopyFrom(ctx, c.ContainerName, outPath)
 }
 
-func (c *Client) DryRun(ctx context.Context, conn models.Connection, configJSON []byte) ([]byte, error) {
+func (c *Client) DryRun(ctx context.Context, configJSON []byte) ([]byte, error) {
 	const tmpDir = "/tmp/stratum"
 	const cfgName = "config.json"
 	const reportPath = "/tmp/dry_run_report.json"

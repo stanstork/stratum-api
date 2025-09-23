@@ -8,7 +8,12 @@ import (
 )
 
 // RegisterRoutes sets up the API routes
-func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handlers.ConnectionHandler, meta *handlers.MetadataHandler) *mux.Router {
+func NewRouter(auth *handlers.AuthHandler,
+	job *handlers.JobHandler,
+	conn *handlers.ConnectionHandler,
+	meta *handlers.MetadataHandler,
+	report *handlers.ReportHandler) *mux.Router {
+
 	router := mux.NewRouter().StrictSlash(true)
 
 	// Health check route
@@ -53,6 +58,9 @@ func NewRouter(auth *handlers.AuthHandler, job *handlers.JobHandler, conn *handl
 
 	// Metadata routes
 	api.HandleFunc("/connections/{id}/metadata", meta.GetSourceMetadata).Methods(http.MethodGet)
+
+	// Report routes
+	api.HandleFunc("/reports/dry-run/{definition_id}", report.DryRunReport).Methods(http.MethodPost)
 
 	return router
 }
