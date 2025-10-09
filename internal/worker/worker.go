@@ -83,16 +83,16 @@ func (w *Worker) processNextPendingJob(ctx context.Context) error {
 	}
 	defer tx.Rollback() // Ensure rollback on error
 
-	var execID, jobDefID string
+	var execID, jobDefID, tenantID string
 	query := `
-		SELECT id, job_definition_id
+		SELECT id, tenant_id, job_definition_id
 		FROM tenant.job_executions
 		WHERE status = 'pending'
 		ORDER BY created_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
 	`
-	if err := tx.QueryRowContext(ctx, query).Scan(&execID, &jobDefID); err != nil {
+	if err := tx.QueryRowContext(ctx, query).Scan(&execID, &tenantID, &jobDefID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil // No pending jobs found
 		}
@@ -102,8 +102,8 @@ func (w *Worker) processNextPendingJob(ctx context.Context) error {
 	_, err = tx.ExecContext(ctx, `
 		UPDATE tenant.job_executions
 		SET status = 'running'
-		WHERE id = $1
-	`, execID)
+		WHERE id = $1 AND tenant_id = $2
+	`, execID, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to update job execution status to running: %w", err)
 	}
@@ -112,34 +112,34 @@ func (w *Worker) processNextPendingJob(ctx context.Context) error {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	return w.run(ctx, execID, jobDefID)
+	return w.run(ctx, tenantID, execID, jobDefID)
 }
 
-func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
+func (w *Worker) run(ctx context.Context, tenantID, execID, jobDefID string) error {
 	log.Printf("Running job execution %s for job definition %s", execID, jobDefID)
 
 	// Update execution status to running
-	if _, err := w.cfg.JobRepo.UpdateExecution(execID, "running", "", ""); err != nil {
+	if _, err := w.cfg.JobRepo.UpdateExecution(tenantID, execID, "running", "", ""); err != nil {
 		log.Printf("UpdateExecution execID=%s error: %v", execID, err)
 		return errors.Wrap(err, "failed to update execution status to running")
 	}
 
 	// Fetch job definition
-	def, err := w.cfg.JobRepo.GetJobDefinitionByID(jobDefID)
+	def, err := w.cfg.JobRepo.GetJobDefinitionByID(tenantID, jobDefID)
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to fetch job definition: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to fetch job definition: %v", err), "")
 		return errors.Wrap(err, "failed to fetch job definition")
 	}
 
-	source_conn, err := w.cfg.ConnRepo.Get(def.SourceConnectionID)
+	source_conn, err := w.cfg.ConnRepo.Get(tenantID, def.SourceConnectionID)
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to fetch source connection: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to fetch source connection: %v", err), "")
 		return errors.Wrap(err, "failed to fetch source connection")
 	}
 
-	dest_conn, err := w.cfg.ConnRepo.Get(def.DestinationConnectionID)
+	dest_conn, err := w.cfg.ConnRepo.Get(tenantID, def.DestinationConnectionID)
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to fetch destination connection: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to fetch destination connection: %v", err), "")
 		return errors.Wrap(err, "failed to fetch destination connection")
 	}
 
@@ -149,7 +149,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	// Parse the AST and ensure it has the necessary connections
 	var ast map[string]interface{}
 	if err := json.Unmarshal(def.AST, &ast); err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to parse AST: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to parse AST: %v", err), "")
 		return errors.Wrap(err, "failed to parse AST from job definition")
 	}
 	if ast == nil {
@@ -158,12 +158,12 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 
 	source_conn_str, err := source_conn.GenerateConnString()
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to generate source connection string: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to generate source connection string: %v", err), "")
 		return errors.Wrap(err, "failed to generate source connection string")
 	}
 	dest_conn_str, err := dest_conn.GenerateConnString()
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to generate destination connection string: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to generate destination connection string: %v", err), "")
 		return errors.Wrap(err, "failed to generate destination connection string")
 	}
 
@@ -184,11 +184,11 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 
 	astBytes, err := json.Marshal(ast)
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to marshal AST: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to marshal AST: %v", err), "")
 		return errors.Wrap(err, "failed to marshal AST to JSON")
 	}
 	if err := os.WriteFile(tmpFileName, astBytes, 0644); err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to write AST to file: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to write AST to file: %v", err), "")
 		return errors.Wrapf(err, "failed to write AST to temporary file %s", tmpFileName)
 	}
 	log.Printf("AST written to temporary file: %s", tmpFileName)
@@ -202,7 +202,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	authToken, err := generateJobToken(execID, def.TenantID, w.cfg.JWTSigningKey)
 	if err != nil {
 		// Update execution status to failed
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", "Failed to generate auth token", "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", "Failed to generate auth token", "")
 		return errors.Wrap(err, "failed to generate auth token for container")
 	}
 
@@ -257,7 +257,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		// Pull the image
 		reader, err := w.cli.ImagePull(ctx, w.cfg.EngineImage, image.PullOptions{})
 		if err != nil {
-			w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to pull image: %v", err), "")
+			w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to pull image: %v", err), "")
 			return fmt.Errorf("failed to pull image: %w", err)
 		}
 
@@ -276,7 +276,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		"",  // Container name (empty means Docker will assign a random name)
 	)
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to create container: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to create container: %v", err), "")
 		return fmt.Errorf("failed to create container: %w", err)
 	}
 
@@ -285,7 +285,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 
 	// Start the container
 	if err := w.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to start container: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to start container: %v", err), "")
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
@@ -298,7 +298,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	}
 	logReader, err := w.cli.ContainerLogs(ctx, containerID, logOpts)
 	if err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Failed to get container logs: %v", err), "")
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Failed to get container logs: %v", err), "")
 		return fmt.Errorf("failed to get container logs: %w", err)
 	}
 	defer logReader.Close()
@@ -310,7 +310,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 
 	// stdcopy will consume the multiplexed stream and write “pure” output
 	if _, err := stdcopy.StdCopy(stdoutBuf, stderrBuf, logReader); err != nil {
-		w.cfg.JobRepo.UpdateExecution(execID,
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID,
 			"failed",
 			fmt.Sprintf("Failed to demux container logs: %v", err),
 			"",
@@ -326,12 +326,12 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 	waitResp, errCh := w.cli.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
 	select {
 	case err := <-errCh:
-		w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Container wait error: %v", err), mergedLogs)
+		w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Container wait error: %v", err), mergedLogs)
 		return fmt.Errorf("container wait error: %w", err)
 	case status := <-waitResp:
 		exitCode := status.StatusCode
 		if exitCode != 0 {
-			w.cfg.JobRepo.UpdateExecution(execID, "failed", fmt.Sprintf("Container exited with code %d", exitCode), mergedLogs)
+			w.cfg.JobRepo.UpdateExecution(tenantID, execID, "failed", fmt.Sprintf("Container exited with code %d", exitCode), mergedLogs)
 			log.Printf("Container %s exited with code %d", containerID, exitCode)
 			return fmt.Errorf("container exited with code %d", exitCode)
 		}
@@ -342,7 +342,7 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		time.Sleep(5 * time.Second)
 
 		// Re-fetch the execution to see if the callback updated it.
-		exec, err := w.cfg.JobRepo.GetExecution(execID)
+		exec, err := w.cfg.JobRepo.GetExecution(tenantID, execID)
 		if err != nil {
 			log.Printf("Failed to re-fetch execution %s after run: %v", execID, err)
 			// We can't be sure of the status, so we don't update it.
@@ -353,12 +353,12 @@ func (w *Worker) run(ctx context.Context, execID, jobDefID string) error {
 		if exec.Status == "running" {
 			// The callback did not arrive in time. The worker takes responsibility.
 			log.Printf("Engine report for %s did not arrive in time. Marking as succeeded without metrics.", execID)
-			w.cfg.JobRepo.UpdateExecution(execID, "succeeded", "", mergedLogs)
+			w.cfg.JobRepo.UpdateExecution(tenantID, execID, "succeeded", "", mergedLogs)
 		} else {
 			// The callback was successful and updated the status.
 			log.Printf("Execution %s status was successfully set to '%s' by engine report.", execID, exec.Status)
 			// Save logs
-			w.cfg.JobRepo.UpdateExecution(execID, exec.Status, "", mergedLogs)
+			w.cfg.JobRepo.UpdateExecution(tenantID, execID, exec.Status, "", mergedLogs)
 		}
 	}
 

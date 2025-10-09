@@ -76,14 +76,17 @@ func initDatabase(cfg *config.Config) *sql.DB {
 func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
 	jobRepo := repository.NewJobRepository(db)
 	connRepo := repository.NewConnectionRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	tenantRepo := repository.NewTenantRepository(db)
 
 	authHandler := handlers.NewAuthHandler(db, cfg)
 	jobHandler := handlers.NewJobHandler(jobRepo)
 	connHandler := handlers.NewConnectionHandler(connRepo, cfg.Worker.EngineContainer)
 	metaHandler := handlers.NewMetadataHandler(connRepo, cfg.Worker.EngineContainer)
 	reportHandler := handlers.NewReportHandler(connRepo, jobRepo, cfg.Worker.EngineContainer)
+	tenantHandler := handlers.NewTenantHandler(tenantRepo, userRepo)
 
-	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler)
+	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler)
 }
 
 // initWorker constructs, starts, and returns the worker’s context cancel function.

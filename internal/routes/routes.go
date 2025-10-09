@@ -12,7 +12,8 @@ func NewRouter(auth *handlers.AuthHandler,
 	job *handlers.JobHandler,
 	conn *handlers.ConnectionHandler,
 	meta *handlers.MetadataHandler,
-	report *handlers.ReportHandler) *mux.Router {
+	report *handlers.ReportHandler,
+	tenant *handlers.TenantHandler) *mux.Router {
 
 	router := mux.NewRouter().StrictSlash(true)
 
@@ -22,6 +23,8 @@ func NewRouter(auth *handlers.AuthHandler,
 	// Public auth endpoints
 	router.HandleFunc("/api/signup", auth.SignUp).Methods(http.MethodPost)
 	router.HandleFunc("/api/login", auth.Login).Methods(http.MethodPost)
+	router.HandleFunc("/api/tenants", tenant.CreateTenant).Methods(http.MethodPost)
+	router.HandleFunc("/api/tenants/{tenantID}/users", tenant.AddUser).Methods(http.MethodPost)
 
 	// Protected routes with tenant ID in context
 	api := router.PathPrefix("/api").Subrouter()

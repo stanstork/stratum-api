@@ -8,29 +8,30 @@ import (
 	"github.com/stanstork/stratum-api/internal/utils"
 )
 
-type ConnectionRepository interface {
-	List() ([]*models.Connection, error)
-	Get(id string) (*models.Connection, error)
-	Create(conn *models.Connection) (*models.Connection, error)
-	Update(conn *models.Connection) (*models.Connection, error)
-	Delete(id string) error
-}
-
 type connectionRepository struct {
 	db *sql.DB
+}
+
+type ConnectionRepository interface {
+	List(tenantID string) ([]*models.Connection, error)
+	Get(tenantID, id string) (*models.Connection, error)
+	Create(conn *models.Connection) (*models.Connection, error)
+	Update(conn *models.Connection) (*models.Connection, error)
+	Delete(tenantID, id string) error
 }
 
 func NewConnectionRepository(db *sql.DB) ConnectionRepository {
 	return &connectionRepository{db: db}
 }
 
-func (r *connectionRepository) List() ([]*models.Connection, error) {
+func (r *connectionRepository) List(tenantID string) ([]*models.Connection, error) {
 	const q = `
-SELECT id, name, data_format, host, port, username, password, db_name, status, created_at, updated_at
+SELECT id, tenant_id, name, data_format, host, port, username, password, db_name, status, created_at, updated_at
 FROM tenant.connections
+WHERE tenant_id = $1
 ORDER BY name;
 `
-	rows, err := r.db.Query(q)
+	rows, err := r.db.Query(q, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +42,7 @@ ORDER BY name;
 		var c models.Connection
 		var encPwd []byte
 		if err := rows.Scan(
-			&c.ID, &c.Name, &c.DataFormat,
+			&c.ID, &c.TenantID, &c.Name, &c.DataFormat,
 			&c.Host, &c.Port, &c.Username, &encPwd, &c.DBName, &c.Status,
 			&c.CreatedAt, &c.UpdatedAt,
 		); err != nil {
@@ -57,20 +58,26 @@ ORDER BY name;
 	return conns, rows.Err()
 }
 
-func (r *connectionRepository) Get(id string) (*models.Connection, error) {
+func (r *connectionRepository) Get(tenantID, id string) (*models.Connection, error) {
 	const q = `
-SELECT id, name, data_format, host, port, username, password, db_name, created_at, updated_at
+SELECT id, tenant_id, name, data_format, host, port, username, password, db_name, status, created_at, updated_at
 FROM tenant.connections
-WHERE id = $1;
+WHERE id = $1 AND tenant_id = $2;
 `
 	var c models.Connection
-	if err := r.db.QueryRow(q, id).Scan(
-		&c.ID, &c.Name, &c.DataFormat,
-		&c.Host, &c.Port, &c.Username, &c.Password, &c.DBName,
+	var encPwd []byte
+	if err := r.db.QueryRow(q, id, tenantID).Scan(
+		&c.ID, &c.TenantID, &c.Name, &c.DataFormat,
+		&c.Host, &c.Port, &c.Username, &encPwd, &c.DBName, &c.Status,
 		&c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
-		return &c, err
+		return nil, err
 	}
+	pwd, err := utils.DecryptPassword(encPwd)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt password: %w", err)
+	}
+	c.Password = pwd
 	return &c, nil
 }
 
@@ -81,16 +88,16 @@ func (r *connectionRepository) Create(conn *models.Connection) (*models.Connecti
 	}
 	const q = `
 INSERT INTO tenant.connections (
-  name, data_format, host, port, username, password, db_name
+  tenant_id, name, data_format, host, port, username, password, db_name
 )
-VALUES ($1,$2,$3,$4,$5,$6,$7)
-RETURNING id, created_at, updated_at;
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+RETURNING id, tenant_id, created_at, updated_at;
 `
 	if err := r.db.QueryRow(
 		q,
-		conn.Name, conn.DataFormat,
+		conn.TenantID, conn.Name, conn.DataFormat,
 		conn.Host, conn.Port, conn.Username, encPwd, conn.DBName,
-	).Scan(&conn.ID, &conn.CreatedAt, &conn.UpdatedAt); err != nil {
+	).Scan(&conn.ID, &conn.TenantID, &conn.CreatedAt, &conn.UpdatedAt); err != nil {
 		return conn, err
 	}
 	return conn, nil
@@ -112,24 +119,21 @@ SET name = $1,
     password = $7,
     db_name = $8,
     updated_at = now()
-WHERE id = $9
-RETURNING created_at, updated_at;
+WHERE id = $9 AND tenant_id = $10
+RETURNING tenant_id, created_at, updated_at;
 `
 	if err := r.db.QueryRow(
 		q,
 		conn.Name, conn.DataFormat, conn.Status,
 		conn.Host, conn.Port, conn.Username, encPwd, conn.DBName,
-		conn.ID,
-	).Scan(&conn.CreatedAt, &conn.UpdatedAt); err != nil {
+		conn.ID, conn.TenantID,
+	).Scan(&conn.TenantID, &conn.CreatedAt, &conn.UpdatedAt); err != nil {
 		return conn, err
 	}
 	return conn, nil
 }
 
-func (r *connectionRepository) Delete(id string) error {
-	_, err := r.db.Exec("DELETE FROM tenant.connections WHERE id = $1", id)
-	if err != nil {
-		return err
-	}
-	return nil
+func (r *connectionRepository) Delete(tenantID, id string) error {
+	_, err := r.db.Exec("DELETE FROM tenant.connections WHERE id = $1 AND tenant_id = $2", id, tenantID)
+	return err
 }

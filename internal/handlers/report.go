@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,18 +40,31 @@ func NewReportHandler(conn repository.ConnectionRepository, job repository.JobRe
 }
 
 func (h *ReportHandler) DryRunReport(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	defID := mux.Vars(r)["definition_id"]
 
 	// Load definition
-	def, err := h.job.GetJobDefinitionByID(defID)
+	def, err := h.job.GetJobDefinitionByID(tid, defID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Job definition not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to get job definition: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Load connections
-	srcConn, err := h.conn.Get(def.SourceConnectionID)
+	srcConn, err := h.conn.Get(tid, def.SourceConnectionID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Source connection not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to get source connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -59,8 +73,12 @@ func (h *ReportHandler) DryRunReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	destConn, err := h.conn.Get(def.DestinationConnectionID)
+	destConn, err := h.conn.Get(tid, def.DestinationConnectionID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Destination connection not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to get destination connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

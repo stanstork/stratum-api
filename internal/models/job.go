@@ -21,6 +21,7 @@ type JobDefinition struct {
 
 type JobExecution struct {
 	ID               string     `json:"id" db:"id"`
+	TenantID         string     `json:"tenant_id" db:"tenant_id"`
 	JobDefinitionID  string     `json:"job_definition_id" db:"job_definition_id"`
 	Status           string     `json:"status" db:"status"`
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`

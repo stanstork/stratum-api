@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"regexp"
@@ -67,9 +69,18 @@ func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	id := mux.Vars(r)["id"]
-	conn, err := h.repo.Get(id)
+	conn, err := h.repo.Get(tid, id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Connection not found", http.StatusNotFound)
+			return
+		}
 		log.Printf("Failed to get connection with ID %s: %v", id, err)
 		http.Error(w, "Failed to get connection: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -116,7 +127,12 @@ func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Re
 }
 
 func (h *ConnectionHandler) List(w http.ResponseWriter, r *http.Request) {
-	connections, err := h.repo.List()
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
+	connections, err := h.repo.List(tid)
 	if err != nil {
 		http.Error(w, "Failed to list connections: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -133,17 +149,21 @@ func (h *ConnectionHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Get(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	id := mux.Vars(r)["id"]
-	conn, err := h.repo.Get(id)
+	conn, err := h.repo.Get(tid, id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Connection not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to get connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if conn == nil {
-		http.Error(w, "Connection not found", http.StatusNotFound)
-		return
-	}
-
 	conn.Password = "" // Omit password in response for security
 
 	w.Header().Set("Content-Type", "application/json")
@@ -153,11 +173,17 @@ func (h *ConnectionHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Create(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	var conn models.Connection
 	if err := json.NewDecoder(r.Body).Decode(&conn); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
+	conn.TenantID = tid
 
 	if conn.Status == "" {
 		conn.Status = "untested" // Default status if not provided
@@ -178,6 +204,11 @@ func (h *ConnectionHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Update(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	id := mux.Vars(r)["id"]
 	var conn models.Connection
 	if err := json.NewDecoder(r.Body).Decode(&conn); err != nil {
@@ -185,6 +216,7 @@ func (h *ConnectionHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.ID = id // Ensure the ID is set from the URL
+	conn.TenantID = tid
 
 	updatedConn, err := h.repo.Update(&conn)
 	if err != nil {
@@ -199,8 +231,13 @@ func (h *ConnectionHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	id := mux.Vars(r)["id"]
-	if err := h.repo.Delete(id); err != nil {
+	if err := h.repo.Delete(tid, id); err != nil {
 		http.Error(w, "Failed to delete connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

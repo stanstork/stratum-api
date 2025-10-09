@@ -3,12 +3,11 @@ package models
 import (
 	"fmt"
 	"time"
-
-	"github.com/stanstork/stratum-api/internal/utils"
 )
 
 type Connection struct {
 	ID         string    `json:"id" db:"id"`
+	TenantID   string    `json:"tenant_id" db:"tenant_id"`
 	Name       string    `json:"name" db:"name"`
 	DataFormat string    `json:"data_format" db:"data_format"` // enum: pg, mysql, api, csv
 	Host       string    `json:"host" db:"host"`
@@ -22,11 +21,6 @@ type Connection struct {
 }
 
 func (c *Connection) GenerateConnString() (string, error) {
-	password, err := utils.DecryptPassword([]byte(c.Password))
-	if err != nil {
-		return "", fmt.Errorf("decrypt password: %w", err)
-	}
-	c.Password = string(password)
 	switch c.DataFormat {
 	case "pg", "postgresql", "postgres":
 		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s",

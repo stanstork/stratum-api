@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"net/http"
 	"time"
 
@@ -26,9 +28,18 @@ func NewMetadataHandler(repo repository.ConnectionRepository, containerName stri
 }
 
 func (h *MetadataHandler) GetSourceMetadata(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	id := mux.Vars(r)["id"]
-	conn, err := h.repo.Get(id)
+	conn, err := h.repo.Get(tid, id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Connection not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to get connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

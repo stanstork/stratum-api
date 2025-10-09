@@ -12,19 +12,19 @@ import (
 type JobRepository interface {
 	// JobDefinition methods
 	CrateDefinition(def models.JobDefinition) (models.JobDefinition, error)
-	GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error)
-	ListDefinitions() ([]models.JobDefinition, error)
-	DeleteDefinition(jobDefID string) error
-	ListJobDefinitionsWithStats() ([]models.JobDefinitionStat, error)
+	GetJobDefinitionByID(tenantID, jobDefID string) (models.JobDefinition, error)
+	ListDefinitions(tenantID string) ([]models.JobDefinition, error)
+	DeleteDefinition(tenantID, jobDefID string) error
+	ListJobDefinitionsWithStats(tenantID string) ([]models.JobDefinitionStat, error)
 
 	// JobExecution methods
-	CreateExecution(jobDefID string) (models.JobExecution, error)
-	GetLastExecution(jobDefID string) (models.JobExecution, error)
-	UpdateExecution(execID string, status string, errorMessage string, logs string) (int64, error)
-	ListExecutions(limit, offset int) ([]models.JobExecution, error)
-	ListExecutionStats(days int) (models.ExecutionStat, error)
-	GetExecution(execID string) (models.JobExecution, error)
-	SetExecutionComplete(execID string, status string, recordsProcessed int64, bytesTransferred int64) error
+	CreateExecution(tenantID, jobDefID string) (models.JobExecution, error)
+	GetLastExecution(tenantID, jobDefID string) (models.JobExecution, error)
+	UpdateExecution(tenantID, execID string, status string, errorMessage string, logs string) (int64, error)
+	ListExecutions(tenantID string, limit, offset int) ([]models.JobExecution, error)
+	ListExecutionStats(tenantID string, days int) (models.ExecutionStat, error)
+	GetExecution(tenantID, execID string) (models.JobExecution, error)
+	SetExecutionComplete(tenantID, execID string, status string, recordsProcessed int64, bytesTransferred int64) error
 }
 
 type jobRepository struct {
@@ -38,7 +38,10 @@ func NewJobRepository(db *sql.DB) JobRepository {
 func (r *jobRepository) CrateDefinition(def models.JobDefinition) (models.JobDefinition, error) {
 	query := `
 		INSERT INTO tenant.job_definitions (tenant_id, name, description, ast, source_connection_id, destination_connection_id)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		SELECT $1, $2, $3, $4, $5, $6
+		FROM tenant.connections sc, tenant.connections dc
+		WHERE sc.id = $5 AND sc.tenant_id = $1
+		  AND dc.id = $6 AND dc.tenant_id = $1
 		RETURNING id, created_at, updated_at
 	`
 	err := r.db.QueryRow(query,
@@ -53,22 +56,22 @@ func (r *jobRepository) CrateDefinition(def models.JobDefinition) (models.JobDef
 	return def, err
 }
 
-func (r *jobRepository) ListDefinitions() ([]models.JobDefinition, error) {
+func (r *jobRepository) ListDefinitions(tenantID string) ([]models.JobDefinition, error) {
 	query := `
 		SELECT
 			jd.id, jd.tenant_id, jd.name, jd.description, jd.ast,
 			jd.source_connection_id, jd.destination_connection_id,
-			sc.id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at,
-			dc.id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at,
+			sc.id, sc.tenant_id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.status, sc.created_at, sc.updated_at,
+			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.status, dc.created_at, dc.updated_at,
 			jd.created_at, jd.updated_at
 		FROM tenant.job_definitions jd
 		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
 		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
+		WHERE jd.tenant_id = $1
 		ORDER BY jd.created_at DESC;
 	`
 
-	// TODO: Add tenant filtering
-	rows, err := r.db.Query(query)
+	rows, err := r.db.Query(query, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -86,21 +89,25 @@ func (r *jobRepository) ListDefinitions() ([]models.JobDefinition, error) {
 			&def.SourceConnectionID,
 			&def.DestinationConnectionID,
 			&def.SourceConnection.ID,
+			&def.SourceConnection.TenantID,
 			&def.SourceConnection.Name,
 			&def.SourceConnection.DataFormat,
 			&def.SourceConnection.Host,
 			&def.SourceConnection.Port,
 			&def.SourceConnection.Username,
 			&def.SourceConnection.DBName,
+			&def.SourceConnection.Status,
 			&def.SourceConnection.CreatedAt,
 			&def.SourceConnection.UpdatedAt,
 			&def.DestinationConnection.ID,
+			&def.DestinationConnection.TenantID,
 			&def.DestinationConnection.Name,
 			&def.DestinationConnection.DataFormat,
 			&def.DestinationConnection.Host,
 			&def.DestinationConnection.Port,
 			&def.DestinationConnection.Username,
 			&def.DestinationConnection.DBName,
+			&def.DestinationConnection.Status,
 			&def.DestinationConnection.CreatedAt,
 			&def.DestinationConnection.UpdatedAt,
 			&def.CreatedAt,
@@ -114,34 +121,38 @@ func (r *jobRepository) ListDefinitions() ([]models.JobDefinition, error) {
 	return definitions, nil
 }
 
-func (r *jobRepository) CreateExecution(jobDefID string) (models.JobExecution, error) {
+func (r *jobRepository) CreateExecution(tenantID, jobDefID string) (models.JobExecution, error) {
 	var exec models.JobExecution
 	exec.JobDefinitionID = jobDefID
+	exec.TenantID = tenantID
 	exec.Status = "pending"
 	query := `
-		INSERT INTO tenant.job_executions (job_definition_id, status, run_started_at, run_completed_at)
-        VALUES ($1, $2, NULL, NULL)
-        RETURNING id, created_at, updated_at
-	` // omit timestamps
-	err := r.db.QueryRow(query, jobDefID, exec.Status).
-		Scan(&exec.ID, &exec.CreatedAt, &exec.UpdatedAt)
+		INSERT INTO tenant.job_executions (tenant_id, job_definition_id, status, run_started_at, run_completed_at)
+		SELECT $1, $2, $3, NULL, NULL
+		FROM tenant.job_definitions
+		WHERE id = $2 AND tenant_id = $1
+		RETURNING id, tenant_id, created_at, updated_at
+	`
+	err := r.db.QueryRow(query, tenantID, jobDefID, exec.Status).
+		Scan(&exec.ID, &exec.TenantID, &exec.CreatedAt, &exec.UpdatedAt)
 	if err != nil {
 		return exec, err
 	}
 	return exec, nil
 }
 
-func (r *jobRepository) GetLastExecution(jobDefID string) (models.JobExecution, error) {
+func (r *jobRepository) GetLastExecution(tenantID, jobDefID string) (models.JobExecution, error) {
 	query := `
-		SELECT id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs, records_processed, bytes_transferred
+		SELECT id, tenant_id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs, records_processed, bytes_transferred
 		FROM tenant.job_executions
-		WHERE job_definition_id = $1
+		WHERE job_definition_id = $1 AND tenant_id = $2
 		ORDER BY created_at DESC
 		LIMIT 1
 	`
 	var exec models.JobExecution
-	err := r.db.QueryRow(query, jobDefID).Scan(
+	err := r.db.QueryRow(query, jobDefID, tenantID).Scan(
 		&exec.ID,
+		&exec.TenantID,
 		&exec.JobDefinitionID,
 		&exec.Status,
 		&exec.CreatedAt,
@@ -162,21 +173,21 @@ func (r *jobRepository) GetLastExecution(jobDefID string) (models.JobExecution, 
 	return exec, nil // Return the found execution
 }
 
-func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinition, error) {
+func (r *jobRepository) GetJobDefinitionByID(tenantID, jobDefID string) (models.JobDefinition, error) {
 	query := `
 		SELECT
 			jd.id, jd.tenant_id, jd.name, jd.description, jd.ast,
 			jd.source_connection_id, jd.destination_connection_id,
-			sc.id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at, sc.status,
-			dc.id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at, dc.status,
+			sc.id, sc.tenant_id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at, sc.status,
+			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at, dc.status,
 			jd.created_at, jd.updated_at
 		FROM tenant.job_definitions jd
 		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
 		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
-		WHERE jd.id = $1;
+		WHERE jd.id = $1 AND jd.tenant_id = $2;
 	`
 	var def models.JobDefinition
-	err := r.db.QueryRow(query, jobDefID).Scan(
+	err := r.db.QueryRow(query, jobDefID, tenantID).Scan(
 		&def.ID,
 		&def.TenantID,
 		&def.Name,
@@ -185,6 +196,7 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 		&def.SourceConnectionID,
 		&def.DestinationConnectionID,
 		&def.SourceConnection.ID,
+		&def.SourceConnection.TenantID,
 		&def.SourceConnection.Name,
 		&def.SourceConnection.DataFormat,
 		&def.SourceConnection.Host,
@@ -195,6 +207,7 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 		&def.SourceConnection.UpdatedAt,
 		&def.SourceConnection.Status,
 		&def.DestinationConnection.ID,
+		&def.DestinationConnection.TenantID,
 		&def.DestinationConnection.Name,
 		&def.DestinationConnection.DataFormat,
 		&def.DestinationConnection.Host,
@@ -216,12 +229,12 @@ func (r *jobRepository) GetJobDefinitionByID(jobDefID string) (models.JobDefinit
 	return def, nil
 }
 
-func (r *jobRepository) DeleteDefinition(jobDefID string) error {
+func (r *jobRepository) DeleteDefinition(tenantID, jobDefID string) error {
 	query := `
 		DELETE FROM tenant.job_definitions
-		WHERE id = $1;
+		WHERE id = $1 AND tenant_id = $2;
 	`
-	res, err := r.db.Exec(query, jobDefID)
+	res, err := r.db.Exec(query, jobDefID, tenantID)
 	if err != nil {
 		log.Printf("Error deleting job definition %s: %v", jobDefID, err)
 		return fmt.Errorf("failed to delete job definition: %w", err)
@@ -239,7 +252,7 @@ func (r *jobRepository) DeleteDefinition(jobDefID string) error {
 }
 
 func (r *jobRepository) UpdateExecution(
-	execID, status, errorMessage, logs string,
+	tenantID, execID, status, errorMessage, logs string,
 ) (int64, error) {
 	var (
 		query string
@@ -255,9 +268,9 @@ func (r *jobRepository) UpdateExecution(
                    updated_at      = NOW(),
                    error_message   = NULL,
                    logs            = NULL
-             WHERE id = $2
+             WHERE id = $2 AND tenant_id = $3
         `
-		args = []interface{}{status, execID}
+		args = []interface{}{status, execID, tenantID}
 
 	case "succeeded", "failed":
 		query = `
@@ -267,9 +280,9 @@ func (r *jobRepository) UpdateExecution(
                    updated_at         = NOW(),
                    error_message      = NULLIF($2, ''),
                    logs               = NULLIF($3, '')
-             WHERE id = $4
+             WHERE id = $4 AND tenant_id = $5
         `
-		args = []interface{}{status, errorMessage, logs, execID}
+		args = []interface{}{status, errorMessage, logs, execID, tenantID}
 
 	default:
 		return 0, fmt.Errorf("invalid status %q", status)
@@ -282,10 +295,11 @@ func (r *jobRepository) UpdateExecution(
 	return res.RowsAffected()
 }
 
-func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution, error) {
+func (r *jobRepository) ListExecutions(tenantID string, limit, offset int) ([]models.JobExecution, error) {
 	const query = `
         SELECT
             id,
+            tenant_id,
             job_definition_id,
             status,
             created_at,
@@ -297,11 +311,12 @@ func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution
             records_processed,
             bytes_transferred
         FROM tenant.job_executions
+        WHERE tenant_id = $1
         ORDER BY created_at DESC
-        LIMIT $1
-        OFFSET $2
+        LIMIT $2
+        OFFSET $3
     `
-	rows, err := r.db.Query(query, limit, offset)
+	rows, err := r.db.Query(query, tenantID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +332,7 @@ func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution
 
 		if err := rows.Scan(
 			&e.ID,
+			&e.TenantID,
 			&e.JobDefinitionID,
 			&e.Status,
 			&e.CreatedAt,
@@ -352,7 +368,7 @@ func (r *jobRepository) ListExecutions(limit, offset int) ([]models.JobExecution
 	return executions, nil
 }
 
-func (r *jobRepository) ListExecutionStats(days int) (models.ExecutionStat, error) {
+func (r *jobRepository) ListExecutionStats(tenantID string, days int) (models.ExecutionStat, error) {
 	const query = `
 		WITH days AS (
 			SELECT generate_series(
@@ -369,12 +385,12 @@ func (r *jobRepository) ListExecutionStats(days int) (models.ExecutionStat, erro
 			COALESCE(SUM((je.status = 'pending')::int), 0)     AS pending
 		FROM days
 		LEFT JOIN tenant.job_executions je
-		ON je.created_at::DATE = days.day
+		ON je.created_at::DATE = days.day AND je.tenant_id = $2
 		GROUP BY days.day
 		ORDER BY days.day;
 	`
 
-	rows, err := r.db.Query(query, days)
+	rows, err := r.db.Query(query, days, tenantID)
 	if err != nil {
 		return models.ExecutionStat{}, fmt.Errorf("ListExecutionStats query error: %w", err)
 	}
@@ -395,20 +411,21 @@ func (r *jobRepository) ListExecutionStats(days int) (models.ExecutionStat, erro
 			COALESCE(SUM((status = 'succeeded')::int), 0) AS succeeded,
 			COALESCE(SUM((status = 'failed')::int), 0)    AS failed,
 			COALESCE(SUM((status = 'running')::int), 0)   AS running
-		FROM tenant.job_executions;
+		FROM tenant.job_executions
+		WHERE tenant_id = $1;
 	`
 
 	var stats models.ExecutionStat
-	row := r.db.QueryRow(totalQuery)
+	row := r.db.QueryRow(totalQuery, tenantID)
 	if err := row.Scan(&stats.Total, &stats.Succeeded, &stats.Failed, &stats.Running); err != nil {
 		return models.ExecutionStat{}, fmt.Errorf("GetExecutionStats total scan error: %w", err)
 	}
 
 	const defQuery = `
-		SELECT COALESCE(COUNT(*), 0) FROM tenant.job_definitions;
+		SELECT COALESCE(COUNT(*), 0) FROM tenant.job_definitions WHERE tenant_id = $1;
 	`
 	var totalDefinitions int
-	row = r.db.QueryRow(defQuery)
+	row = r.db.QueryRow(defQuery, tenantID)
 	if err := row.Scan(&totalDefinitions); err != nil {
 		return models.ExecutionStat{}, fmt.Errorf("GetExecutionStats total definitions scan error: %w", err)
 	}
@@ -424,15 +441,16 @@ func (r *jobRepository) ListExecutionStats(days int) (models.ExecutionStat, erro
 	return stats, nil
 }
 
-func (r *jobRepository) GetExecution(execID string) (models.JobExecution, error) {
+func (r *jobRepository) GetExecution(tenantID, execID string) (models.JobExecution, error) {
 	query := `
-		SELECT id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs, records_processed, bytes_transferred
+		SELECT id, tenant_id, job_definition_id, status, created_at, updated_at, run_started_at, run_completed_at, error_message, logs, records_processed, bytes_transferred
 		FROM tenant.job_executions
-		WHERE id = $1;
+		WHERE id = $1 AND tenant_id = $2;
 	`
 	var exec models.JobExecution
-	err := r.db.QueryRow(query, execID).Scan(
+	err := r.db.QueryRow(query, execID, tenantID).Scan(
 		&exec.ID,
+		&exec.TenantID,
 		&exec.JobDefinitionID,
 		&exec.Status,
 		&exec.CreatedAt,
@@ -453,18 +471,18 @@ func (r *jobRepository) GetExecution(execID string) (models.JobExecution, error)
 	return exec, nil
 }
 
-func (r *jobRepository) SetExecutionComplete(execID string, status string, recordsProcessed int64, bytesTransferred int64) error {
+func (r *jobRepository) SetExecutionComplete(tenantID, execID string, status string, recordsProcessed int64, bytesTransferred int64) error {
 	query := `
 		UPDATE tenant.job_executions
 		SET status = $1, run_completed_at = NOW(), records_processed = $2, bytes_transferred = $3
-		WHERE id = $4;
+		WHERE id = $4 AND tenant_id = $5;
 	`
-	_, err := r.db.Exec(query, status, recordsProcessed, bytesTransferred, execID)
+	_, err := r.db.Exec(query, status, recordsProcessed, bytesTransferred, execID, tenantID)
 	return err
 }
 
 // Retrieves all job definitions along with their execution stats.
-func (r *jobRepository) ListJobDefinitionsWithStats() ([]models.JobDefinitionStat, error) {
+func (r *jobRepository) ListJobDefinitionsWithStats(tenantID string) ([]models.JobDefinitionStat, error) {
 	const query = `
 		WITH ranked_executions AS (
 		SELECT
@@ -475,12 +493,13 @@ func (r *jobRepository) ListJobDefinitionsWithStats() ([]models.JobDefinitionSta
 			ROW_NUMBER() OVER(PARTITION BY job_definition_id ORDER BY created_at DESC) as run_rank
 		FROM
 			tenant.job_executions
+		WHERE tenant_id = $1
 		)
 		SELECT
 			jd.id, jd.tenant_id, jd.name, jd.description,
 			jd.source_connection_id, jd.destination_connection_id,
-			sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.status,
-			dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.status,
+			sc.id, sc.tenant_id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.status,
+			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.status,
 			jd.created_at, jd.updated_at,
 		COALESCE(stats.total_runs, 0) AS total_runs,
 		stats.last_run_status,
@@ -502,12 +521,13 @@ func (r *jobRepository) ListJobDefinitionsWithStats() ([]models.JobDefinitionSta
 		GROUP BY
 			job_definition_id
 		) stats ON jd.id = stats.job_definition_id
+		WHERE jd.tenant_id = $1
 		ORDER BY
 		jd.created_at DESC;
 	`
 
 	results := []models.JobDefinitionStat{}
-	rows, err := r.db.Query(query)
+	rows, err := r.db.Query(query, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -522,6 +542,8 @@ func (r *jobRepository) ListJobDefinitionsWithStats() ([]models.JobDefinitionSta
 			&stat.JobDefinition.Description,
 			&stat.JobDefinition.SourceConnectionID,
 			&stat.JobDefinition.DestinationConnectionID,
+			&stat.JobDefinition.SourceConnection.ID,
+			&stat.JobDefinition.SourceConnection.TenantID,
 			&stat.JobDefinition.SourceConnection.Name,
 			&stat.JobDefinition.SourceConnection.DataFormat,
 			&stat.JobDefinition.SourceConnection.Host,
@@ -529,6 +551,8 @@ func (r *jobRepository) ListJobDefinitionsWithStats() ([]models.JobDefinitionSta
 			&stat.JobDefinition.SourceConnection.Username,
 			&stat.JobDefinition.SourceConnection.DBName,
 			&stat.JobDefinition.SourceConnection.Status,
+			&stat.JobDefinition.DestinationConnection.ID,
+			&stat.JobDefinition.DestinationConnection.TenantID,
 			&stat.JobDefinition.DestinationConnection.Name,
 			&stat.JobDefinition.DestinationConnection.DataFormat,
 			&stat.JobDefinition.DestinationConnection.Host,

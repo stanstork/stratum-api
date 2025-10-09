@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/stanstork/stratum-api/internal/models"
@@ -20,8 +23,22 @@ func NewJobHandler(repo repository.JobRepository) *JobHandler {
 	}
 }
 
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	return strings.Contains(err.Error(), "not found")
+}
+
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
-	tid := r.Context().Value("tenant_id").(string)
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	var payload struct {
 		Name                    string          `json:"name"`
 		Description             string          `json:"description"`
@@ -52,8 +69,12 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
-	// tid := r.Context().Value("tenant_id").(string)
-	definitions, err := h.repo.ListDefinitions()
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
+	definitions, err := h.repo.ListDefinitions(tid)
 	if err != nil {
 		http.Error(w, "Failed to list job definitions: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -63,9 +84,18 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) DelteJob(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	jobDefID := mux.Vars(r)["jobID"]
 
-	if err := h.repo.DeleteDefinition(jobDefID); err != nil {
+	if err := h.repo.DeleteDefinition(tid, jobDefID); err != nil {
+		if isNotFound(err) {
+			http.Error(w, "Job definition not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to delete job definition: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -73,11 +103,18 @@ func (h *JobHandler) DelteJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
-	// tid := r.Context().Value("tenant_id").(string)
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	jobDefID := mux.Vars(r)["jobID"]
-	// TODO: Verify that the job definition belongs to the tenant
-	execution, err := h.repo.CreateExecution(jobDefID)
+	execution, err := h.repo.CreateExecution(tid, jobDefID)
 	if err != nil {
+		if isNotFound(err) {
+			http.Error(w, "Job definition not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to create job execution: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -87,12 +124,19 @@ func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
-	// tid := r.Context().Value("tenant_id").(string)
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	jobDefID := mux.Vars(r)["jobID"]
-	// TODO: Verify that the job definition belongs to the tenant
-	execution, err := h.repo.GetLastExecution(jobDefID)
+	execution, err := h.repo.GetLastExecution(tid, jobDefID)
 	if err != nil {
-		http.Error(w, "Failed to get job execution status: "+err.Error(), http.StatusNotFound)
+		if isNotFound(err) {
+			http.Error(w, "Job execution not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to get job execution status: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -100,6 +144,11 @@ func (h *JobHandler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) ListExecutions(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	// parse query params with defaults
 	limit := 20
 	offset := 0
@@ -114,7 +163,7 @@ func (h *JobHandler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	executions, err := h.repo.ListExecutions(limit, offset)
+	executions, err := h.repo.ListExecutions(tid, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -123,6 +172,11 @@ func (h *JobHandler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetExecutionStats(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	days := 31 // default to 31 days
 	if d := r.URL.Query().Get("days"); d != "" {
 		if v, err := strconv.Atoi(d); err == nil {
@@ -130,7 +184,7 @@ func (h *JobHandler) GetExecutionStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	stats, err := h.repo.ListExecutionStats(days)
+	stats, err := h.repo.ListExecutionStats(tid, days)
 	if err != nil {
 		http.Error(w, "Failed to get execution stats: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -141,10 +195,19 @@ func (h *JobHandler) GetExecutionStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetJobDefinition(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	jobDefID := mux.Vars(r)["jobID"]
-	definition, err := h.repo.GetJobDefinitionByID(jobDefID)
+	definition, err := h.repo.GetJobDefinitionByID(tid, jobDefID)
 	if err != nil {
-		http.Error(w, "Failed to get job definition: "+err.Error(), http.StatusNotFound)
+		if isNotFound(err) {
+			http.Error(w, "Job definition not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to get job definition: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -152,10 +215,19 @@ func (h *JobHandler) GetJobDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	execID := mux.Vars(r)["execID"]
-	execution, err := h.repo.GetExecution(execID)
+	execution, err := h.repo.GetExecution(tid, execID)
 	if err != nil {
-		http.Error(w, "Failed to get job execution: "+err.Error(), http.StatusNotFound)
+		if isNotFound(err) {
+			http.Error(w, "Job execution not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to get job execution: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -163,6 +235,11 @@ func (h *JobHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request) {
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
 	execID := mux.Vars(r)["execID"]
 	var req struct {
 		Status           string `json:"status"`
@@ -173,7 +250,11 @@ func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Failed to decode request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := h.repo.SetExecutionComplete(execID, req.Status, req.RecordsProcessed, req.BytesTransferred); err != nil {
+	if err := h.repo.SetExecutionComplete(tid, execID, req.Status, req.RecordsProcessed, req.BytesTransferred); err != nil {
+		if isNotFound(err) {
+			http.Error(w, "Job execution not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to set execution complete: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -181,7 +262,12 @@ func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request
 }
 
 func (h *JobHandler) ListJobDefinitionsWithStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.repo.ListJobDefinitionsWithStats()
+	tid, ok := tenantIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
+		return
+	}
+	stats, err := h.repo.ListJobDefinitionsWithStats(tid)
 	if err != nil {
 		http.Error(w, "Failed to get job definition stats: "+err.Error(), http.StatusNotFound)
 		return
