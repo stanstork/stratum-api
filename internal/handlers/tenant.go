@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/stanstork/stratum-api/internal/authz"
+	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/repository"
 )
 
@@ -53,10 +55,20 @@ func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
+	requesterRoles, _ := authz.RolesFromRequest(r)
+	isSuperAdmin := models.HasAtLeast(requesterRoles, models.RoleSuperAdmin)
+
 	tenantID := mux.Vars(r)["tenantID"]
 	if tenantID == "" {
 		http.Error(w, "Tenant ID is required", http.StatusBadRequest)
 		return
+	}
+
+	if !isSuperAdmin {
+		if tid, ok := authz.TenantIDFromRequest(r); !ok || tid != tenantID {
+			http.Error(w, "insufficient permissions for tenant", http.StatusForbidden)
+			return
+		}
 	}
 
 	if _, err := h.tenantRepo.GetTenantByID(tenantID); err != nil {
@@ -69,8 +81,10 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email    string   `json:"email"`
+		Password string   `json:"password"`
+		Role     string   `json:"role"`
+		Roles    []string `json:"roles"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
@@ -83,7 +97,29 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.userRepo.CreateUser(tenantID, payload.Email, payload.Password)
+	var roles []models.UserRole
+	if len(payload.Roles) > 0 {
+		for _, roleStr := range payload.Roles {
+			role := models.UserRole(strings.ToLower(strings.TrimSpace(roleStr)))
+			roles = append(roles, role)
+		}
+	} else if payload.Role != "" {
+		roles = []models.UserRole{models.UserRole(strings.ToLower(strings.TrimSpace(payload.Role)))}
+	} else {
+		roles = []models.UserRole{models.RoleViewer}
+	}
+	roles = models.NormalizeRoles(roles)
+	if !models.IsValidRoleList(roles) {
+		http.Error(w, "Invalid roles", http.StatusBadRequest)
+		return
+	}
+
+	if !isSuperAdmin && models.HasAtLeast(roles, models.RoleSuperAdmin) {
+		http.Error(w, "insufficient permissions to assign role", http.StatusForbidden)
+		return
+	}
+
+	user, err := h.userRepo.CreateUser(tenantID, payload.Email, payload.Password, roles)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") {
 			http.Error(w, "User already exists", http.StatusConflict)
@@ -94,15 +130,17 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := struct {
-		ID       string `json:"id"`
-		TenantID string `json:"tenant_id"`
-		Email    string `json:"email"`
-		IsActive bool   `json:"is_active"`
+		ID       string            `json:"id"`
+		TenantID string            `json:"tenant_id"`
+		Email    string            `json:"email"`
+		IsActive bool              `json:"is_active"`
+		Roles    []models.UserRole `json:"roles"`
 	}{
 		ID:       user.ID,
 		TenantID: user.TenantID,
 		Email:    user.Email,
 		IsActive: user.IsActive,
+		Roles:    user.Roles,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

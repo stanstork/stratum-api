@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/repository"
 )
@@ -34,7 +35,7 @@ func isNotFound(err error) bool {
 }
 
 func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -69,7 +70,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -84,7 +85,7 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) DelteJob(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -103,7 +104,7 @@ func (h *JobHandler) DelteJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -124,7 +125,7 @@ func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -144,7 +145,7 @@ func (h *JobHandler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) ListExecutions(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -172,7 +173,7 @@ func (h *JobHandler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetExecutionStats(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -195,7 +196,7 @@ func (h *JobHandler) GetExecutionStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetJobDefinition(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -215,7 +216,7 @@ func (h *JobHandler) GetJobDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -235,7 +236,7 @@ func (h *JobHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -262,7 +263,7 @@ func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request
 }
 
 func (h *JobHandler) ListJobDefinitionsWithStats(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return

@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/gorilla/mux"
+	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/engine"
 	"github.com/stanstork/stratum-api/internal/repository"
 )
@@ -40,7 +41,7 @@ func NewReportHandler(conn repository.ConnectionRepository, job repository.JobRe
 }
 
 func (h *ReportHandler) DryRunReport(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return

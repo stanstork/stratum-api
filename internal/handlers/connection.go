@@ -10,6 +10,7 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/gorilla/mux"
+	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/engine"
 	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/repository"
@@ -69,7 +70,7 @@ func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -127,7 +128,7 @@ func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Re
 }
 
 func (h *ConnectionHandler) List(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -149,7 +150,7 @@ func (h *ConnectionHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Get(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -173,7 +174,7 @@ func (h *ConnectionHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Create(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -204,7 +205,7 @@ func (h *ConnectionHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Update(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
@@ -231,7 +232,7 @@ func (h *ConnectionHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ConnectionHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return

@@ -9,6 +9,7 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/gorilla/mux"
+	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/engine"
 	"github.com/stanstork/stratum-api/internal/repository"
 )
@@ -28,7 +29,7 @@ func NewMetadataHandler(repo repository.ConnectionRepository, containerName stri
 }
 
 func (h *MetadataHandler) GetSourceMetadata(w http.ResponseWriter, r *http.Request) {
-	tid, ok := tenantIDFromRequest(r)
+	tid, ok := authz.TenantIDFromRequest(r)
 	if !ok {
 		http.Error(w, "Missing tenant context", http.StatusUnauthorized)
 		return
