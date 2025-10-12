@@ -12,6 +12,7 @@ import (
 type UserRepository interface {
 	CreateUser(tenantID, email, password string, roles []models.UserRole) (models.User, error)
 	AuthenticateUser(email, password string) (models.User, error)
+	ListUsersByTenant(tenantID string) ([]models.User, error)
 }
 
 type userRepository struct {
@@ -87,6 +88,44 @@ func (u *userRepository) AuthenticateUser(email string, password string) (models
 	}
 
 	return user, nil
+}
+
+func (u *userRepository) ListUsersByTenant(tenantID string) ([]models.User, error) {
+	const query = `
+		SELECT id, tenant_id, email, is_active, roles
+		FROM tenant.users
+		WHERE tenant_id = $1
+		ORDER BY email`
+
+	rows, err := u.db.Query(query, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var user models.User
+		var roles pq.StringArray
+
+		if err := rows.Scan(&user.ID, &user.TenantID, &user.Email, &user.IsActive, &roles); err != nil {
+			return nil, err
+		}
+
+		normalized := models.EnsureDefaultRole(toUserRoleSlice(roles))
+		if !models.IsValidRoleList(normalized) {
+			return nil, errors.New("encountered user with invalid roles")
+		}
+		user.Roles = normalized
+
+		users = append(users, user)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
 }
 
 func toStringSlice(roles []models.UserRole) []string {

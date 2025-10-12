@@ -18,6 +18,14 @@ type TenantHandler struct {
 	userRepo   repository.UserRepository
 }
 
+type tenantUserResponse struct {
+	ID       string            `json:"id"`
+	TenantID string            `json:"tenant_id"`
+	Email    string            `json:"email"`
+	IsActive bool              `json:"is_active"`
+	Roles    []models.UserRole `json:"roles"`
+}
+
 func NewTenantHandler(tenantRepo repository.TenantRepository, userRepo repository.UserRepository) *TenantHandler {
 	return &TenantHandler{
 		tenantRepo: tenantRepo,
@@ -114,11 +122,6 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !isSuperAdmin && models.HasAtLeast(roles, models.RoleSuperAdmin) {
-		http.Error(w, "insufficient permissions to assign role", http.StatusForbidden)
-		return
-	}
-
 	user, err := h.userRepo.CreateUser(tenantID, payload.Email, payload.Password, roles)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") {
@@ -146,4 +149,76 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
+}
+
+func (h *TenantHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	requesterRoles, _ := authz.RolesFromRequest(r)
+	isSuperAdmin := models.HasAtLeast(requesterRoles, models.RoleSuperAdmin)
+
+	tenantID := mux.Vars(r)["tenantID"]
+	if tenantID == "" {
+		http.Error(w, "Tenant ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if !isSuperAdmin {
+		if tid, ok := authz.TenantIDFromRequest(r); !ok || tid != tenantID {
+			http.Error(w, "insufficient permissions for tenant", http.StatusForbidden)
+			return
+		}
+	}
+
+	h.writeTenantUsersResponse(w, tenantID)
+}
+
+func (h *TenantHandler) ListCurrentTenantUsers(w http.ResponseWriter, r *http.Request) {
+	requesterRoles, _ := authz.RolesFromRequest(r)
+	isTenantAdmin := models.HasAtLeast(requesterRoles, models.RoleAdmin)
+
+	tenantID, ok := authz.TenantIDFromRequest(r)
+	if !ok || tenantID == "" {
+		http.Error(w, "tenant context missing", http.StatusForbidden)
+		return
+	}
+
+	if !isTenantAdmin {
+		http.Error(w, "insufficient permissions for tenant", http.StatusForbidden)
+		return
+	}
+
+	h.writeTenantUsersResponse(w, tenantID)
+}
+
+func (h *TenantHandler) writeTenantUsersResponse(w http.ResponseWriter, tenantID string) {
+	if _, err := h.tenantRepo.GetTenantByID(tenantID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Tenant not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to load tenant: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	users, err := h.userRepo.ListUsersByTenant(tenantID)
+	if err != nil {
+		http.Error(w, "Failed to list users: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := make([]tenantUserResponse, 0, len(users))
+	for _, user := range users {
+		response = append(response, tenantUserResponse{
+			ID:       user.ID,
+			TenantID: user.TenantID,
+			Email:    user.Email,
+			IsActive: user.IsActive,
+			Roles:    user.Roles,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
 }

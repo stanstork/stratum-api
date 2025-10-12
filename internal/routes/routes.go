@@ -34,8 +34,14 @@ func NewRouter(auth *handlers.AuthHandler,
 		authz.RequireRoleHandler(models.RoleSuperAdmin, http.HandlerFunc(tenant.CreateTenant)),
 	).Methods(http.MethodPost)
 	api.Handle("/tenants/{tenantID}/users",
+		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(tenant.ListUsers)),
+	).Methods(http.MethodGet)
+	api.Handle("/tenants/{tenantID}/users",
 		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(tenant.AddUser)),
 	).Methods(http.MethodPost)
+	api.Handle("/users",
+		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(tenant.ListCurrentTenantUsers)),
+	).Methods(http.MethodGet)
 
 	// Base "/jobs" routes
 	api.Handle("/jobs",
