@@ -15,6 +15,7 @@ import (
 	"github.com/stanstork/stratum-api/internal/handlers"
 	"github.com/stanstork/stratum-api/internal/middleware"
 	"github.com/stanstork/stratum-api/internal/migration"
+	"github.com/stanstork/stratum-api/internal/notification"
 	"github.com/stanstork/stratum-api/internal/repository"
 	"github.com/stanstork/stratum-api/internal/routes"
 	"github.com/stanstork/stratum-api/internal/worker"
@@ -78,6 +79,7 @@ func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
 	connRepo := repository.NewConnectionRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
+	inviteRepo := repository.NewInviteRepository(db)
 
 	authHandler := handlers.NewAuthHandler(db, cfg)
 	jobHandler := handlers.NewJobHandler(jobRepo)
@@ -85,8 +87,13 @@ func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
 	metaHandler := handlers.NewMetadataHandler(connRepo, cfg.Worker.EngineContainer)
 	reportHandler := handlers.NewReportHandler(connRepo, jobRepo, cfg.Worker.EngineContainer)
 	tenantHandler := handlers.NewTenantHandler(tenantRepo, userRepo)
+	inviteMailer, err := notification.NewSMTPInviteMailer(cfg.Email)
+	if err != nil {
+		log.Fatalf("failed to configure invite mailer: %v", err)
+	}
+	inviteHandler := handlers.NewInviteHandler(inviteRepo, tenantRepo, userRepo, inviteMailer, cfg.Email.InviteURLTemplate)
 
-	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler)
+	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler, inviteHandler)
 }
 
 // initWorker constructs, starts, and returns the worker’s context cancel function.

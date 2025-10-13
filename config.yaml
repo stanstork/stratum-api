@@ -7,6 +7,14 @@ server_port: "8080"
 # JWT secret key for signing tokens
 jwt_secret: "this_is_a_very_secret_key"
 
+email:
+  from: "no-reply@stratum.dev"
+  smtp_host: "smtp.example.com"
+  smtp_port: 587
+  username: "smtp-user"
+  password: "smtp-password"
+  invite_url_template: "https://app.stratum.dev/invite/accept?token=%s"
+
 worker:
   poll_interval: "5s"  # interval for polling the database for new tasks
   engine_image: "stratum-engine:latest"      # docker image for the worker engine

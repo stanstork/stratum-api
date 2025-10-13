@@ -13,6 +13,8 @@ type UserRepository interface {
 	CreateUser(tenantID, email, password string, roles []models.UserRole) (models.User, error)
 	AuthenticateUser(email, password string) (models.User, error)
 	ListUsersByTenant(tenantID string) ([]models.User, error)
+	GetUserByEmail(email string) (models.User, error)
+	UpdateUserRoles(userID string, roles []models.UserRole) (models.User, error)
 }
 
 type userRepository struct {
@@ -85,6 +87,67 @@ func (u *userRepository) AuthenticateUser(email string, password string) (models
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return models.User{}, errors.New("invalid credentials")
+	}
+
+	return user, nil
+}
+
+func (u *userRepository) GetUserByEmail(email string) (models.User, error) {
+	var user models.User
+	var roles pq.StringArray
+
+	const query = `
+		SELECT id, tenant_id, email, password_hash, is_active, roles
+		FROM tenant.users
+		WHERE email = $1`
+
+	err := u.db.QueryRow(query, email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.IsActive, &roles)
+	if err != nil {
+		return models.User{}, err
+	}
+
+	user.Roles = models.EnsureDefaultRole(toUserRoleSlice(roles))
+	if !models.IsValidRoleList(user.Roles) {
+		return models.User{}, errors.New("user has invalid roles")
+	}
+
+	return user, nil
+}
+
+func (u *userRepository) UpdateUserRoles(userID string, roles []models.UserRole) (models.User, error) {
+	if len(roles) == 0 {
+		return models.User{}, errors.New("roles cannot be empty")
+	}
+
+	normalized := models.EnsureDefaultRole(models.NormalizeRoles(roles))
+	if !models.IsValidRoleList(normalized) {
+		return models.User{}, errors.New("invalid roles")
+	}
+
+	const query = `
+		UPDATE tenant.users
+		SET roles = $2, updated_at = now()
+		WHERE id = $1
+		RETURNING id, tenant_id, email, password_hash, is_active, roles
+	`
+
+	var user models.User
+	var updatedRoles pq.StringArray
+	err := u.db.QueryRow(query, userID, pq.Array(toStringSlice(normalized))).Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.PasswordHash,
+		&user.IsActive,
+		&updatedRoles,
+	)
+	if err != nil {
+		return models.User{}, err
+	}
+
+	user.Roles = models.EnsureDefaultRole(toUserRoleSlice(updatedRoles))
+	if !models.IsValidRoleList(user.Roles) {
+		return models.User{}, errors.New("user has invalid roles after update")
 	}
 
 	return user, nil

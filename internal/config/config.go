@@ -21,6 +21,16 @@ type Config struct {
 	ServerPort  string       `mapstructure:"server_port"`
 	JWTSecret   string       `mapstructure:"jwt_secret"`
 	Worker      WorkerConfig `mapstructure:"worker"`
+	Email       EmailConfig  `mapstructure:"email"`
+}
+
+type EmailConfig struct {
+	From              string `mapstructure:"from"`
+	SMTPHost          string `mapstructure:"smtp_host"`
+	SMTPPort          int    `mapstructure:"smtp_port"`
+	Username          string `mapstructure:"username"`
+	Password          string `mapstructure:"password"`
+	InviteURLTemplate string `mapstructure:"invite_url_template"`
 }
 
 // Load reads the configuration from a YAML file and returns a Config instance.
@@ -49,6 +59,13 @@ func Load() *Config {
 
 	if config.JWTSecret == "" {
 		log.Fatal("JWT secret must be set in the config file")
+	}
+
+	if config.Email.SMTPPort == 0 {
+		config.Email.SMTPPort = 587
+	}
+	if config.Email.InviteURLTemplate == "" {
+		config.Email.InviteURLTemplate = "https://app.stratum.dev/invite/accept?token=%s"
 	}
 
 	return &config

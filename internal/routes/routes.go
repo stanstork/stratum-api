@@ -15,7 +15,8 @@ func NewRouter(auth *handlers.AuthHandler,
 	conn *handlers.ConnectionHandler,
 	meta *handlers.MetadataHandler,
 	report *handlers.ReportHandler,
-	tenant *handlers.TenantHandler) *mux.Router {
+	tenant *handlers.TenantHandler,
+	invite *handlers.InviteHandler) *mux.Router {
 
 	router := mux.NewRouter().StrictSlash(true)
 
@@ -25,6 +26,10 @@ func NewRouter(auth *handlers.AuthHandler,
 	// Public auth endpoints
 	router.HandleFunc("/api/signup", auth.SignUp).Methods(http.MethodPost)
 	router.HandleFunc("/api/login", auth.Login).Methods(http.MethodPost)
+
+	// Public invite workflows
+	router.HandleFunc("/api/invites/{token}", invite.PreviewInvite).Methods(http.MethodGet)
+	router.HandleFunc("/api/invites/{token}/accept", invite.AcceptInvite).Methods(http.MethodPost)
 
 	// Protected routes with tenant ID in context
 	api := router.PathPrefix("/api").Subrouter()
@@ -38,6 +43,12 @@ func NewRouter(auth *handlers.AuthHandler,
 	).Methods(http.MethodGet)
 	api.Handle("/tenants/{tenantID}/users",
 		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(tenant.AddUser)),
+	).Methods(http.MethodPost)
+	api.Handle("/tenants/{tenantID}/invites",
+		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(invite.CreateInvite)),
+	).Methods(http.MethodPost)
+	api.Handle("/users/invites",
+		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(invite.CreateCurrentTenantInvite)),
 	).Methods(http.MethodPost)
 	api.Handle("/users",
 		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(tenant.ListCurrentTenantUsers)),
