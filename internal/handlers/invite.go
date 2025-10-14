@@ -351,6 +351,84 @@ func (h *InviteHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *InviteHandler) ListCurrentInvites(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := authz.TenantIDFromRequest(r)
+	if !ok || tenantID == "" {
+		http.Error(w, "tenant context missing", http.StatusForbidden)
+		return
+	}
+
+	_, err := h.tenantRepo.GetTenantByID(tenantID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "tenant not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to load tenant: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	invites, err := h.inviteRepo.ListInvitesByTenant(tenantID)
+	if err != nil {
+		http.Error(w, "failed to list invites: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type inviteInfo struct {
+		ID         string            `json:"id"`
+		Email      string            `json:"email"`
+		Roles      []models.UserRole `json:"roles"`
+		ExpiresAt  time.Time         `json:"expires_at"`
+		AcceptedAt *time.Time        `json:"accepted_at,omitempty"`
+		CreatedAt  time.Time         `json:"created_at"`
+		CreatedBy  *string           `json:"created_by,omitempty"`
+	}
+
+	response := make([]inviteInfo, 0, len(invites))
+	for _, inv := range invites {
+		response = append(response, inviteInfo{
+			ID:         inv.ID,
+			Email:      inv.Email,
+			Roles:      inv.Roles,
+			ExpiresAt:  inv.ExpiresAt,
+			AcceptedAt: inv.AcceptedAt,
+			CreatedAt:  inv.CreatedAt,
+			CreatedBy:  inv.CreatedBy,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "failed to encode response: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+func (h *InviteHandler) CancelCurrentInvite(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := authz.TenantIDFromRequest(r)
+	if !ok || tenantID == "" {
+		http.Error(w, "tenant context missing", http.StatusForbidden)
+		return
+	}
+
+	inviteID := mux.Vars(r)["inviteID"]
+	if inviteID == "" {
+		http.Error(w, "invite ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.inviteRepo.CancelInvite(inviteID, tenantID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "invite not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to cancel invite: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func generateInviteToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

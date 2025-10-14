@@ -53,6 +53,12 @@ func NewRouter(auth *handlers.AuthHandler,
 	api.Handle("/users",
 		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(tenant.ListCurrentTenantUsers)),
 	).Methods(http.MethodGet)
+	api.Handle("/users/invites",
+		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(invite.ListCurrentInvites)),
+	).Methods(http.MethodGet)
+	api.Handle("/users/invites/{inviteID}",
+		authz.RequireRoleHandler(models.RoleAdmin, http.HandlerFunc(invite.CancelCurrentInvite)),
+	).Methods(http.MethodDelete)
 
 	// Base "/jobs" routes
 	api.Handle("/jobs",
