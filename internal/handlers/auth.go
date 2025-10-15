@@ -20,9 +20,11 @@ type AuthHandler struct {
 }
 
 type signupRequest struct {
-	TenantID string `json:"tenant_id"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	TenantID  string `json:"tenant_id"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
 }
 
 type loginRequest struct {
@@ -44,7 +46,11 @@ func (h *AuthHandler) SignUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.userRepository.CreateUser(req.TenantID, req.Email, req.Password, []models.UserRole{models.RoleViewer})
+	req.Email = strings.TrimSpace(req.Email)
+	req.FirstName = strings.TrimSpace(req.FirstName)
+	req.LastName = strings.TrimSpace(req.LastName)
+
+	user, err := h.userRepository.CreateUser(req.TenantID, req.Email, req.Password, req.FirstName, req.LastName, []models.UserRole{models.RoleViewer})
 	if err != nil {
 		http.Error(w, "Failed to create user: "+err.Error(), http.StatusBadRequest)
 		return

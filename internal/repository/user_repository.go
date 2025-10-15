@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/lib/pq"
 	"github.com/stanstork/stratum-api/internal/models"
@@ -10,7 +11,7 @@ import (
 )
 
 type UserRepository interface {
-	CreateUser(tenantID, email, password string, roles []models.UserRole) (models.User, error)
+	CreateUser(tenantID, email, password, firstName, lastName string, roles []models.UserRole) (models.User, error)
 	AuthenticateUser(email, password string) (models.User, error)
 	ListUsersByTenant(tenantID string) ([]models.User, error)
 	GetUserByEmail(email string) (models.User, error)
@@ -27,7 +28,7 @@ func NewUserRepository(db *sql.DB) UserRepository {
 	return &userRepository{db: db}
 }
 
-func (u *userRepository) CreateUser(tenantID string, email string, password string, roles []models.UserRole) (models.User, error) {
+func (u *userRepository) CreateUser(tenantID string, email string, password string, firstName string, lastName string, roles []models.UserRole) (models.User, error) {
 	if len(roles) == 0 {
 		roles = []models.UserRole{models.RoleViewer}
 	}
@@ -35,6 +36,9 @@ func (u *userRepository) CreateUser(tenantID string, email string, password stri
 		return models.User{}, errors.New("invalid roles")
 	}
 	normalized := models.EnsureDefaultRole(models.NormalizeRoles(roles))
+
+	firstName = strings.TrimSpace(firstName)
+	lastName = strings.TrimSpace(lastName)
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -44,16 +48,18 @@ func (u *userRepository) CreateUser(tenantID string, email string, password stri
 	user := models.User{
 		TenantID:     tenantID,
 		Email:        email,
+		FirstName:    firstName,
+		LastName:     lastName,
 		PasswordHash: string(hash),
 		IsActive:     true,
 		Roles:        normalized,
 	}
 
 	query := `
-		INSERT INTO tenant.users (tenant_id, email, password_hash, is_active, roles)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO tenant.users (tenant_id, email, first_name, last_name, password_hash, is_active, roles)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id`
-	err = u.db.QueryRow(query, user.TenantID, user.Email, user.PasswordHash, user.IsActive, pq.Array(toStringSlice(user.Roles))).Scan(&user.ID)
+	err = u.db.QueryRow(query, user.TenantID, user.Email, user.FirstName, user.LastName, user.PasswordHash, user.IsActive, pq.Array(toStringSlice(user.Roles))).Scan(&user.ID)
 	if err != nil {
 		return models.User{}, err
 	}
@@ -66,10 +72,19 @@ func (u *userRepository) AuthenticateUser(email string, password string) (models
 	var roles pq.StringArray
 
 	query := `
-		SELECT id, tenant_id, email, password_hash, is_active, roles
+		SELECT id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 		FROM tenant.users
 		WHERE email = $1`
-	err := u.db.QueryRow(query, email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.IsActive, &roles)
+	err := u.db.QueryRow(query, email).Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.FirstName,
+		&user.LastName,
+		&user.PasswordHash,
+		&user.IsActive,
+		&roles,
+	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.User{}, errors.New("invalid credentials")
@@ -99,11 +114,20 @@ func (u *userRepository) GetUserByEmail(email string) (models.User, error) {
 	var roles pq.StringArray
 
 	const query = `
-		SELECT id, tenant_id, email, password_hash, is_active, roles
+		SELECT id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 		FROM tenant.users
 		WHERE email = $1`
 
-	err := u.db.QueryRow(query, email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.IsActive, &roles)
+	err := u.db.QueryRow(query, email).Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.FirstName,
+		&user.LastName,
+		&user.PasswordHash,
+		&user.IsActive,
+		&roles,
+	)
 	if err != nil {
 		return models.User{}, err
 	}
@@ -121,7 +145,7 @@ func (u *userRepository) GetUserByID(userID string) (models.User, error) {
 	var roles pq.StringArray
 
 	const query = `
-		SELECT id, tenant_id, email, password_hash, is_active, roles
+		SELECT id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 		FROM tenant.users
 		WHERE id = $1`
 
@@ -129,6 +153,8 @@ func (u *userRepository) GetUserByID(userID string) (models.User, error) {
 		&user.ID,
 		&user.TenantID,
 		&user.Email,
+		&user.FirstName,
+		&user.LastName,
 		&user.PasswordHash,
 		&user.IsActive,
 		&roles,
@@ -159,7 +185,7 @@ func (u *userRepository) UpdateUserRoles(userID string, roles []models.UserRole)
 		UPDATE tenant.users
 		SET roles = $2, updated_at = now()
 		WHERE id = $1
-		RETURNING id, tenant_id, email, password_hash, is_active, roles
+		RETURNING id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 	`
 
 	var user models.User
@@ -168,6 +194,8 @@ func (u *userRepository) UpdateUserRoles(userID string, roles []models.UserRole)
 		&user.ID,
 		&user.TenantID,
 		&user.Email,
+		&user.FirstName,
+		&user.LastName,
 		&user.PasswordHash,
 		&user.IsActive,
 		&updatedRoles,
@@ -207,7 +235,7 @@ func (u *userRepository) DeleteUser(userID string) error {
 
 func (u *userRepository) ListUsersByTenant(tenantID string) ([]models.User, error) {
 	const query = `
-		SELECT id, tenant_id, email, is_active, roles
+		SELECT id, tenant_id, email, first_name, last_name, is_active, roles
 		FROM tenant.users
 		WHERE tenant_id = $1
 		ORDER BY email`
@@ -223,7 +251,7 @@ func (u *userRepository) ListUsersByTenant(tenantID string) ([]models.User, erro
 		var user models.User
 		var roles pq.StringArray
 
-		if err := rows.Scan(&user.ID, &user.TenantID, &user.Email, &user.IsActive, &roles); err != nil {
+		if err := rows.Scan(&user.ID, &user.TenantID, &user.Email, &user.FirstName, &user.LastName, &user.IsActive, &roles); err != nil {
 			return nil, err
 		}
 

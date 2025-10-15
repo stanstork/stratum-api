@@ -19,11 +19,13 @@ type TenantHandler struct {
 }
 
 type tenantUserResponse struct {
-	ID       string            `json:"id"`
-	TenantID string            `json:"tenant_id"`
-	Email    string            `json:"email"`
-	IsActive bool              `json:"is_active"`
-	Roles    []models.UserRole `json:"roles"`
+	ID        string            `json:"id"`
+	TenantID  string            `json:"tenant_id"`
+	Email     string            `json:"email"`
+	FirstName string            `json:"first_name"`
+	LastName  string            `json:"last_name"`
+	IsActive  bool              `json:"is_active"`
+	Roles     []models.UserRole `json:"roles"`
 }
 
 func NewTenantHandler(tenantRepo repository.TenantRepository, userRepo repository.UserRepository) *TenantHandler {
@@ -89,15 +91,20 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Email    string   `json:"email"`
-		Password string   `json:"password"`
-		Role     string   `json:"role"`
-		Roles    []string `json:"roles"`
+		Email     string   `json:"email"`
+		Password  string   `json:"password"`
+		Role      string   `json:"role"`
+		Roles     []string `json:"roles"`
+		FirstName string   `json:"first_name"`
+		LastName  string   `json:"last_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
+
+	firstName := strings.TrimSpace(payload.FirstName)
+	lastName := strings.TrimSpace(payload.LastName)
 
 	payload.Email = strings.TrimSpace(payload.Email)
 	if payload.Email == "" || payload.Password == "" {
@@ -122,7 +129,7 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.userRepo.CreateUser(tenantID, payload.Email, payload.Password, roles)
+	user, err := h.userRepo.CreateUser(tenantID, payload.Email, payload.Password, firstName, lastName, roles)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") {
 			http.Error(w, "User already exists", http.StatusConflict)
@@ -133,17 +140,21 @@ func (h *TenantHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := struct {
-		ID       string            `json:"id"`
-		TenantID string            `json:"tenant_id"`
-		Email    string            `json:"email"`
-		IsActive bool              `json:"is_active"`
-		Roles    []models.UserRole `json:"roles"`
+		ID        string            `json:"id"`
+		TenantID  string            `json:"tenant_id"`
+		Email     string            `json:"email"`
+		FirstName string            `json:"first_name"`
+		LastName  string            `json:"last_name"`
+		IsActive  bool              `json:"is_active"`
+		Roles     []models.UserRole `json:"roles"`
 	}{
-		ID:       user.ID,
-		TenantID: user.TenantID,
-		Email:    user.Email,
-		IsActive: user.IsActive,
-		Roles:    user.Roles,
+		ID:        user.ID,
+		TenantID:  user.TenantID,
+		Email:     user.Email,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+		IsActive:  user.IsActive,
+		Roles:     user.Roles,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -208,11 +219,13 @@ func (h *TenantHandler) writeTenantUsersResponse(w http.ResponseWriter, tenantID
 	response := make([]tenantUserResponse, 0, len(users))
 	for _, user := range users {
 		response = append(response, tenantUserResponse{
-			ID:       user.ID,
-			TenantID: user.TenantID,
-			Email:    user.Email,
-			IsActive: user.IsActive,
-			Roles:    user.Roles,
+			ID:        user.ID,
+			TenantID:  user.TenantID,
+			Email:     user.Email,
+			FirstName: user.FirstName,
+			LastName:  user.LastName,
+			IsActive:  user.IsActive,
+			Roles:     user.Roles,
 		})
 	}
 
@@ -291,11 +304,13 @@ func (h *TenantHandler) UpdateUserRoles(w http.ResponseWriter, r *http.Request) 
 	}
 
 	response := tenantUserResponse{
-		ID:       updatedUser.ID,
-		TenantID: updatedUser.TenantID,
-		Email:    updatedUser.Email,
-		IsActive: updatedUser.IsActive,
-		Roles:    updatedUser.Roles,
+		ID:        updatedUser.ID,
+		TenantID:  updatedUser.TenantID,
+		Email:     updatedUser.Email,
+		FirstName: updatedUser.FirstName,
+		LastName:  updatedUser.LastName,
+		IsActive:  updatedUser.IsActive,
+		Roles:     updatedUser.Roles,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -282,7 +282,9 @@ func (h *InviteHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Password string `json:"password"`
+		Password  string `json:"password"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request payload", http.StatusBadRequest)
@@ -326,11 +328,13 @@ func (h *InviteHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		}
 	case errors.Is(err, sql.ErrNoRows):
 		password := strings.TrimSpace(payload.Password)
+		firstName := strings.TrimSpace(payload.FirstName)
+		lastName := strings.TrimSpace(payload.LastName)
 		if password == "" {
 			http.Error(w, "password is required", http.StatusBadRequest)
 			return
 		}
-		if _, err := h.userRepo.CreateUser(invite.TenantID, invite.Email, password, invite.Roles); err != nil {
+		if _, err := h.userRepo.CreateUser(invite.TenantID, invite.Email, password, firstName, lastName, invite.Roles); err != nil {
 			http.Error(w, "failed to create user: "+err.Error(), http.StatusInternalServerError)
 			return
 		}

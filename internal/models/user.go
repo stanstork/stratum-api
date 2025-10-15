@@ -101,6 +101,8 @@ type User struct {
 	ID           string     `json:"id"`
 	TenantID     string     `json:"tenant_id"`
 	Email        string     `json:"email"`
+	FirstName    string     `json:"first_name"`
+	LastName     string     `json:"last_name"`
 	PasswordHash string     `json:"password_hash"`
 	IsActive     bool       `json:"is_active"`
 	Roles        []UserRole `json:"roles"`
