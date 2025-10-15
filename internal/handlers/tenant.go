@@ -222,3 +222,129 @@ func (h *TenantHandler) writeTenantUsersResponse(w http.ResponseWriter, tenantID
 		return
 	}
 }
+
+func (h *TenantHandler) UpdateUserRoles(w http.ResponseWriter, r *http.Request) {
+	userID := mux.Vars(r)["userID"]
+	if strings.TrimSpace(userID) == "" {
+		http.Error(w, "User ID is required", http.StatusBadRequest)
+		return
+	}
+
+	requesterRoles, _ := authz.RolesFromRequest(r)
+	isSuperAdmin := models.HasAtLeast(requesterRoles, models.RoleSuperAdmin)
+
+	existingUser, err := h.userRepo.GetUserByID(userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to load user: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !isSuperAdmin {
+		requesterTenantID, ok := authz.TenantIDFromRequest(r)
+		if !ok || requesterTenantID == "" {
+			http.Error(w, "tenant context missing", http.StatusForbidden)
+			return
+		}
+		if existingUser.TenantID != requesterTenantID {
+			http.Error(w, "insufficient permissions for tenant", http.StatusForbidden)
+			return
+		}
+	}
+
+	var payload struct {
+		Roles []string `json:"roles"`
+		Role  string   `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	var roles []models.UserRole
+	if len(payload.Roles) > 0 {
+		for _, roleStr := range payload.Roles {
+			role := models.UserRole(strings.ToLower(strings.TrimSpace(roleStr)))
+			roles = append(roles, role)
+		}
+	} else if payload.Role != "" {
+		roles = []models.UserRole{models.UserRole(strings.ToLower(strings.TrimSpace(payload.Role)))}
+	}
+
+	roles = models.NormalizeRoles(roles)
+	if !models.IsValidRoleList(roles) {
+		http.Error(w, "Invalid roles", http.StatusBadRequest)
+		return
+	}
+
+	updatedUser, err := h.userRepo.UpdateUserRoles(existingUser.ID, roles)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid roles") || strings.Contains(err.Error(), "cannot be empty") {
+			http.Error(w, "Invalid roles", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Failed to update user roles: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := tenantUserResponse{
+		ID:       updatedUser.ID,
+		TenantID: updatedUser.TenantID,
+		Email:    updatedUser.Email,
+		IsActive: updatedUser.IsActive,
+		Roles:    updatedUser.Roles,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (h *TenantHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	userID := mux.Vars(r)["userID"]
+	if strings.TrimSpace(userID) == "" {
+		http.Error(w, "User ID is required", http.StatusBadRequest)
+		return
+	}
+
+	requesterRoles, _ := authz.RolesFromRequest(r)
+	isSuperAdmin := models.HasAtLeast(requesterRoles, models.RoleSuperAdmin)
+
+	existingUser, err := h.userRepo.GetUserByID(userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to load user: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !isSuperAdmin {
+		requesterTenantID, ok := authz.TenantIDFromRequest(r)
+		if !ok || requesterTenantID == "" {
+			http.Error(w, "tenant context missing", http.StatusForbidden)
+			return
+		}
+		if existingUser.TenantID != requesterTenantID {
+			http.Error(w, "insufficient permissions for tenant", http.StatusForbidden)
+			return
+		}
+	}
+
+	if err := h.userRepo.DeleteUser(existingUser.ID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to delete user: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

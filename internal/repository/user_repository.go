@@ -14,7 +14,9 @@ type UserRepository interface {
 	AuthenticateUser(email, password string) (models.User, error)
 	ListUsersByTenant(tenantID string) ([]models.User, error)
 	GetUserByEmail(email string) (models.User, error)
+	GetUserByID(userID string) (models.User, error)
 	UpdateUserRoles(userID string, roles []models.UserRole) (models.User, error)
+	DeleteUser(userID string) error
 }
 
 type userRepository struct {
@@ -114,6 +116,35 @@ func (u *userRepository) GetUserByEmail(email string) (models.User, error) {
 	return user, nil
 }
 
+func (u *userRepository) GetUserByID(userID string) (models.User, error) {
+	var user models.User
+	var roles pq.StringArray
+
+	const query = `
+		SELECT id, tenant_id, email, password_hash, is_active, roles
+		FROM tenant.users
+		WHERE id = $1`
+
+	err := u.db.QueryRow(query, userID).Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.PasswordHash,
+		&user.IsActive,
+		&roles,
+	)
+	if err != nil {
+		return models.User{}, err
+	}
+
+	user.Roles = models.EnsureDefaultRole(toUserRoleSlice(roles))
+	if !models.IsValidRoleList(user.Roles) {
+		return models.User{}, errors.New("user has invalid roles")
+	}
+
+	return user, nil
+}
+
 func (u *userRepository) UpdateUserRoles(userID string, roles []models.UserRole) (models.User, error) {
 	if len(roles) == 0 {
 		return models.User{}, errors.New("roles cannot be empty")
@@ -151,6 +182,27 @@ func (u *userRepository) UpdateUserRoles(userID string, roles []models.UserRole)
 	}
 
 	return user, nil
+}
+
+func (u *userRepository) DeleteUser(userID string) error {
+	const query = `
+		DELETE FROM tenant.users
+		WHERE id = $1`
+
+	result, err := u.db.Exec(query, userID)
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
 }
 
 func (u *userRepository) ListUsersByTenant(tenantID string) ([]models.User, error) {
