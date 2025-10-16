@@ -76,7 +76,7 @@ func (r *inviteRepository) GetInviteByTokenHash(tokenHash string) (models.Invite
 	const query = `
 		SELECT id, tenant_id, email, roles, token_hash, created_by, created_at, updated_at, expires_at, accepted_at
 		FROM tenant.invites
-		WHERE token_hash = $1;
+		WHERE token_hash = $1 AND deleted_at IS NULL;
 	`
 
 	var (
@@ -114,7 +114,7 @@ func (r *inviteRepository) MarkInviteAccepted(inviteID string) (models.Invite, e
 	const query = `
 		UPDATE tenant.invites
 		SET accepted_at = now(), updated_at = now()
-		WHERE id = $1 AND accepted_at IS NULL
+		WHERE id = $1 AND accepted_at IS NULL AND deleted_at IS NULL
 		RETURNING id, tenant_id, email, roles, token_hash, created_by, created_at, updated_at, expires_at, accepted_at;
 	`
 
@@ -153,7 +153,7 @@ func (r *inviteRepository) ListInvitesByTenant(tenantID string) ([]models.Invite
 	const query = `
 		SELECT id, tenant_id, email, roles, token_hash, created_by, created_at, updated_at, expires_at, accepted_at
 		FROM tenant.invites
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC;
 	`
 
@@ -204,8 +204,9 @@ func (r *inviteRepository) ListInvitesByTenant(tenantID string) ([]models.Invite
 
 func (r *inviteRepository) CancelInvite(inviteID, tenantID string) error {
 	const query = `
-		DELETE FROM tenant.invites
-		WHERE id = $1 AND tenant_id = $2 AND accepted_at IS NULL;
+		UPDATE tenant.invites
+		SET deleted_at = now(), updated_at = now()
+		WHERE id = $1 AND tenant_id = $2 AND accepted_at IS NULL AND deleted_at IS NULL;
 	`
 
 	result, err := r.db.Exec(query, inviteID, tenantID)

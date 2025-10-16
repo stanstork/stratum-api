@@ -28,7 +28,7 @@ func (r *connectionRepository) List(tenantID string) ([]*models.Connection, erro
 	const q = `
 SELECT id, tenant_id, name, data_format, host, port, username, password, db_name, status, created_at, updated_at
 FROM tenant.connections
-WHERE tenant_id = $1
+WHERE tenant_id = $1 AND deleted_at IS NULL
 ORDER BY name;
 `
 	rows, err := r.db.Query(q, tenantID)
@@ -62,7 +62,7 @@ func (r *connectionRepository) Get(tenantID, id string) (*models.Connection, err
 	const q = `
 SELECT id, tenant_id, name, data_format, host, port, username, password, db_name, status, created_at, updated_at
 FROM tenant.connections
-WHERE id = $1 AND tenant_id = $2;
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
 `
 	var c models.Connection
 	var encPwd []byte
@@ -119,7 +119,7 @@ SET name = $1,
     password = $7,
     db_name = $8,
     updated_at = now()
-WHERE id = $9 AND tenant_id = $10
+WHERE id = $9 AND tenant_id = $10 AND deleted_at IS NULL
 RETURNING tenant_id, created_at, updated_at;
 `
 	if err := r.db.QueryRow(
@@ -134,6 +134,22 @@ RETURNING tenant_id, created_at, updated_at;
 }
 
 func (r *connectionRepository) Delete(tenantID, id string) error {
-	_, err := r.db.Exec("DELETE FROM tenant.connections WHERE id = $1 AND tenant_id = $2", id, tenantID)
-	return err
+	const q = `
+UPDATE tenant.connections
+SET deleted_at = now(),
+    updated_at = now()
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
+`
+	res, err := r.db.Exec(q, id, tenantID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

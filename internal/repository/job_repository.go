@@ -40,8 +40,8 @@ func (r *jobRepository) CrateDefinition(def models.JobDefinition) (models.JobDef
 		INSERT INTO tenant.job_definitions (tenant_id, name, description, ast, source_connection_id, destination_connection_id)
 		SELECT $1, $2, $3, $4, $5, $6
 		FROM tenant.connections sc, tenant.connections dc
-		WHERE sc.id = $5 AND sc.tenant_id = $1
-		  AND dc.id = $6 AND dc.tenant_id = $1
+		WHERE sc.id = $5 AND sc.tenant_id = $1 AND sc.deleted_at IS NULL
+		  AND dc.id = $6 AND dc.tenant_id = $1 AND dc.deleted_at IS NULL
 		RETURNING id, created_at, updated_at
 	`
 	err := r.db.QueryRow(query,
@@ -65,9 +65,10 @@ func (r *jobRepository) ListDefinitions(tenantID string) ([]models.JobDefinition
 			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.status, dc.created_at, dc.updated_at,
 			jd.created_at, jd.updated_at
 		FROM tenant.job_definitions jd
-		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
-		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
+		JOIN tenant.connections sc ON jd.source_connection_id = sc.id AND sc.deleted_at IS NULL
+		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id AND dc.deleted_at IS NULL
 		WHERE jd.tenant_id = $1
+		  AND jd.deleted_at IS NULL
 		ORDER BY jd.created_at DESC;
 	`
 
@@ -130,7 +131,7 @@ func (r *jobRepository) CreateExecution(tenantID, jobDefID string) (models.JobEx
 		INSERT INTO tenant.job_executions (tenant_id, job_definition_id, status, run_started_at, run_completed_at)
 		SELECT $1, $2, $3, NULL, NULL
 		FROM tenant.job_definitions
-		WHERE id = $2 AND tenant_id = $1
+		WHERE id = $2 AND tenant_id = $1 AND deleted_at IS NULL
 		RETURNING id, tenant_id, created_at, updated_at
 	`
 	err := r.db.QueryRow(query, tenantID, jobDefID, exec.Status).
@@ -182,9 +183,9 @@ func (r *jobRepository) GetJobDefinitionByID(tenantID, jobDefID string) (models.
 			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at, dc.status,
 			jd.created_at, jd.updated_at
 		FROM tenant.job_definitions jd
-		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
-		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
-		WHERE jd.id = $1 AND jd.tenant_id = $2;
+		JOIN tenant.connections sc ON jd.source_connection_id = sc.id AND sc.deleted_at IS NULL
+		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id AND dc.deleted_at IS NULL
+		WHERE jd.id = $1 AND jd.tenant_id = $2 AND jd.deleted_at IS NULL;
 	`
 	var def models.JobDefinition
 	err := r.db.QueryRow(query, jobDefID, tenantID).Scan(
@@ -231,8 +232,9 @@ func (r *jobRepository) GetJobDefinitionByID(tenantID, jobDefID string) (models.
 
 func (r *jobRepository) DeleteDefinition(tenantID, jobDefID string) error {
 	query := `
-		DELETE FROM tenant.job_definitions
-		WHERE id = $1 AND tenant_id = $2;
+		UPDATE tenant.job_definitions
+		SET deleted_at = now(), updated_at = now()
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
 	`
 	res, err := r.db.Exec(query, jobDefID, tenantID)
 	if err != nil {
@@ -422,7 +424,9 @@ func (r *jobRepository) ListExecutionStats(tenantID string, days int) (models.Ex
 	}
 
 	const defQuery = `
-		SELECT COALESCE(COUNT(*), 0) FROM tenant.job_definitions WHERE tenant_id = $1;
+		SELECT COALESCE(COUNT(*), 0)
+		FROM tenant.job_definitions
+		WHERE tenant_id = $1 AND deleted_at IS NULL;
 	`
 	var totalDefinitions int
 	row = r.db.QueryRow(defQuery, tenantID)
@@ -507,8 +511,8 @@ func (r *jobRepository) ListJobDefinitionsWithStats(tenantID string) ([]models.J
 		stats.avg_duration_seconds
 		FROM
 		tenant.job_definitions jd
-		JOIN tenant.connections sc ON jd.source_connection_id = sc.id
-		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id
+		JOIN tenant.connections sc ON jd.source_connection_id = sc.id AND sc.deleted_at IS NULL
+		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id AND dc.deleted_at IS NULL
 		LEFT JOIN (
 		SELECT
 			job_definition_id,
@@ -522,6 +526,7 @@ func (r *jobRepository) ListJobDefinitionsWithStats(tenantID string) ([]models.J
 			job_definition_id
 		) stats ON jd.id = stats.job_definition_id
 		WHERE jd.tenant_id = $1
+		  AND jd.deleted_at IS NULL
 		ORDER BY
 		jd.created_at DESC;
 	`

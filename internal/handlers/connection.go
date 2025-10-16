@@ -239,6 +239,10 @@ func (h *ConnectionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	id := mux.Vars(r)["id"]
 	if err := h.repo.Delete(tid, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "connection not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to delete connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

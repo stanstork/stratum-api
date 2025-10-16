@@ -74,7 +74,7 @@ func (u *userRepository) AuthenticateUser(email string, password string) (models
 	query := `
 		SELECT id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 		FROM tenant.users
-		WHERE email = $1`
+		WHERE email = $1 AND deleted_at IS NULL`
 	err := u.db.QueryRow(query, email).Scan(
 		&user.ID,
 		&user.TenantID,
@@ -116,7 +116,7 @@ func (u *userRepository) GetUserByEmail(email string) (models.User, error) {
 	const query = `
 		SELECT id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 		FROM tenant.users
-		WHERE email = $1`
+		WHERE email = $1 AND deleted_at IS NULL`
 
 	err := u.db.QueryRow(query, email).Scan(
 		&user.ID,
@@ -147,7 +147,7 @@ func (u *userRepository) GetUserByID(userID string) (models.User, error) {
 	const query = `
 		SELECT id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 		FROM tenant.users
-		WHERE id = $1`
+		WHERE id = $1 AND deleted_at IS NULL`
 
 	err := u.db.QueryRow(query, userID).Scan(
 		&user.ID,
@@ -184,7 +184,7 @@ func (u *userRepository) UpdateUserRoles(userID string, roles []models.UserRole)
 	const query = `
 		UPDATE tenant.users
 		SET roles = $2, updated_at = now()
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 		RETURNING id, tenant_id, email, first_name, last_name, password_hash, is_active, roles
 	`
 
@@ -214,8 +214,9 @@ func (u *userRepository) UpdateUserRoles(userID string, roles []models.UserRole)
 
 func (u *userRepository) DeleteUser(userID string) error {
 	const query = `
-		DELETE FROM tenant.users
-		WHERE id = $1`
+		UPDATE tenant.users
+		SET is_active = FALSE, deleted_at = now(), updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL`
 
 	result, err := u.db.Exec(query, userID)
 	if err != nil {
@@ -237,7 +238,7 @@ func (u *userRepository) ListUsersByTenant(tenantID string) ([]models.User, erro
 	const query = `
 		SELECT id, tenant_id, email, first_name, last_name, is_active, roles
 		FROM tenant.users
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1 AND deleted_at IS NULL
 		ORDER BY email`
 
 	rows, err := u.db.Query(query, tenantID)
