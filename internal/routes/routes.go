@@ -67,10 +67,16 @@ func NewRouter(auth *handlers.AuthHandler,
 	).Methods(http.MethodDelete)
 
 	// Base "/jobs" routes
+	api.Handle("/jobs/draft",
+		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.CreateDraft)),
+	).Methods(http.MethodPost)
 	api.Handle("/jobs",
 		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.CreateJob)),
 	).Methods(http.MethodPost)
 	api.HandleFunc("/jobs", job.ListJobs).Methods(http.MethodGet)
+	api.Handle("/jobs/{jobID}",
+		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.AutosaveJob)),
+	).Methods(http.MethodPatch)
 
 	// Specific sub-paths of "/jobs/..." MUST come BEFORE dynamic "/jobs/{jobID}"
 
@@ -85,14 +91,20 @@ func NewRouter(auth *handlers.AuthHandler,
 	).Methods(http.MethodPost)
 
 	api.HandleFunc("/jobs/stats", job.ListJobDefinitionsWithStats).Methods(http.MethodGet)
-	api.Handle("/jobs/{jobID}",
-		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.DelteJob)),
-	).Methods(http.MethodDelete)
-	api.HandleFunc("/jobs/{jobID}", job.GetJobDefinition).Methods(http.MethodGet)
+	api.Handle("/jobs/{jobID}/validate",
+		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.ValidateJobDefinition)),
+	).Methods(http.MethodPost)
+	api.Handle("/jobs/{jobID}/ready",
+		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.MarkDefinitionReady)),
+	).Methods(http.MethodPost)
 	api.Handle("/jobs/{jobID}/run",
 		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.RunJob)),
 	).Methods(http.MethodPost)
 	api.HandleFunc("/jobs/{jobID}/status", job.GetJobStatus).Methods(http.MethodGet)
+	api.Handle("/jobs/{jobID}",
+		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(job.DelteJob)),
+	).Methods(http.MethodDelete)
+	api.HandleFunc("/jobs/{jobID}", job.GetJobDefinition).Methods(http.MethodGet)
 
 	// Connection management routes
 	api.Handle("/connections/test",

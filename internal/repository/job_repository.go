@@ -2,18 +2,23 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/stanstork/stratum-api/internal/models"
 )
+
+var ErrJobDefinitionNotReady = errors.New("job definition not ready")
 
 type JobRepository interface {
 	// JobDefinition methods
 	CrateDefinition(def models.JobDefinition) (models.JobDefinition, error)
 	GetJobDefinitionByID(tenantID, jobDefID string) (models.JobDefinition, error)
 	ListDefinitions(tenantID string) ([]models.JobDefinition, error)
+	UpdateDefinition(tenantID, jobDefID string, update DefinitionUpdate) (models.JobDefinition, error)
 	DeleteDefinition(tenantID, jobDefID string) error
 	ListJobDefinitionsWithStats(tenantID string) ([]models.JobDefinitionStat, error)
 
@@ -31,42 +36,440 @@ type jobRepository struct {
 	db *sql.DB
 }
 
+type DefinitionUpdate struct {
+	Name                    *string
+	Description             *string
+	AST                     *json.RawMessage
+	SourceConnectionID      *string
+	DestinationConnectionID *string
+	Status                  *string
+	ProgressSnapshot        *json.RawMessage
+}
+
+const (
+	definitionStatusDraft      = "DRAFT"
+	definitionStatusValidating = "VALIDATING"
+	definitionStatusReady      = "READY"
+)
+
+var allowedDefinitionStatuses = map[string]struct{}{
+	definitionStatusDraft:      {},
+	definitionStatusValidating: {},
+	definitionStatusReady:      {},
+}
+
+const jobDefinitionSelectColumns = `
+	SELECT
+		jd.id,
+		jd.tenant_id,
+		jd.name,
+		jd.description,
+		jd.ast,
+		jd.source_connection_id,
+		jd.destination_connection_id,
+		jd.status,
+		jd.progress_snapshot,
+		jd.created_at,
+		jd.updated_at,
+		sc.id,
+		sc.tenant_id,
+		sc.name,
+		sc.data_format,
+		sc.host,
+		sc.port,
+		sc.username,
+		sc.db_name,
+		sc.status,
+		sc.created_at,
+		sc.updated_at,
+		dc.id,
+		dc.tenant_id,
+		dc.name,
+		dc.data_format,
+		dc.host,
+		dc.port,
+		dc.username,
+		dc.db_name,
+		dc.status,
+		dc.created_at,
+		dc.updated_at
+	FROM tenant.job_definitions jd
+	LEFT JOIN tenant.connections sc ON jd.source_connection_id = sc.id AND sc.deleted_at IS NULL
+	LEFT JOIN tenant.connections dc ON jd.destination_connection_id = dc.id AND dc.deleted_at IS NULL
+`
+
+func normalizeDefinitionStatus(status string) string {
+	trimmed := strings.ToUpper(strings.TrimSpace(status))
+	if trimmed == "" {
+		return definitionStatusReady
+	}
+	return trimmed
+}
+
+func validateDefinitionStatus(status string) error {
+	if _, ok := allowedDefinitionStatuses[status]; !ok {
+		return fmt.Errorf("invalid job definition status %q", status)
+	}
+	return nil
+}
+
+func nullIfEmpty(value string) interface{} {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
 func NewJobRepository(db *sql.DB) JobRepository {
 	return &jobRepository{db: db}
 }
 
-func (r *jobRepository) CrateDefinition(def models.JobDefinition) (models.JobDefinition, error) {
-	query := `
-		INSERT INTO tenant.job_definitions (tenant_id, name, description, ast, source_connection_id, destination_connection_id)
-		SELECT $1, $2, $3, $4, $5, $6
-		FROM tenant.connections sc, tenant.connections dc
-		WHERE sc.id = $5 AND sc.tenant_id = $1 AND sc.deleted_at IS NULL
-		  AND dc.id = $6 AND dc.tenant_id = $1 AND dc.deleted_at IS NULL
-		RETURNING id, created_at, updated_at
+func (r *jobRepository) validateTennantConnection(tenantID, connectionID string) error {
+	if strings.TrimSpace(connectionID) == "" {
+		return nil
+	}
+
+	const query = `
+		SELECT 1
+		FROM tenant.connections
+		WHERE id = $1
+		  AND tenant_id = $2
+		  AND deleted_at IS NULL
 	`
-	err := r.db.QueryRow(query,
+
+	var exists int
+	if err := r.db.QueryRow(query, connectionID, tenantID).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("connection %s not found for tenant %s", connectionID, tenantID)
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *jobRepository) getDefinitionStatus(tenantID, jobDefID string) (string, error) {
+	const query = `
+		SELECT status
+		FROM tenant.job_definitions
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+	`
+	var status string
+	if err := r.db.QueryRow(query, jobDefID, tenantID).Scan(&status); err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+func (r *jobRepository) recordDefinitionSnapshot(jobDefID, status string, snapshot json.RawMessage) error {
+	if len(snapshot) == 0 {
+		return nil
+	}
+	status = normalizeDefinitionStatus(status)
+	if err := validateDefinitionStatus(status); err != nil {
+		return err
+	}
+	const query = `
+		INSERT INTO tenant.job_definition_snapshots (job_definition_id, status, snapshot)
+		VALUES ($1, $2, $3)
+	`
+	_, err := r.db.Exec(query, jobDefID, status, []byte(snapshot))
+	return err
+}
+
+func scanJobDefinition(scanner interface {
+	Scan(dest ...interface{}) error
+}) (models.JobDefinition, error) {
+	var (
+		def          models.JobDefinition
+		ast          []byte
+		progress     []byte
+		srcConnID    sql.NullString
+		dstConnID    sql.NullString
+		srcID        sql.NullString
+		srcTenantID  sql.NullString
+		srcName      sql.NullString
+		srcFormat    sql.NullString
+		srcHost      sql.NullString
+		srcPort      sql.NullInt64
+		srcUsername  sql.NullString
+		srcDBName    sql.NullString
+		srcStatus    sql.NullString
+		srcCreatedAt sql.NullTime
+		srcUpdatedAt sql.NullTime
+		dstID        sql.NullString
+		dstTenantID  sql.NullString
+		dstName      sql.NullString
+		dstFormat    sql.NullString
+		dstHost      sql.NullString
+		dstPort      sql.NullInt64
+		dstUsername  sql.NullString
+		dstDBName    sql.NullString
+		dstStatus    sql.NullString
+		dstCreatedAt sql.NullTime
+		dstUpdatedAt sql.NullTime
+	)
+
+	if err := scanner.Scan(
+		&def.ID,
+		&def.TenantID,
+		&def.Name,
+		&def.Description,
+		&ast,
+		&srcConnID,
+		&dstConnID,
+		&def.Status,
+		&progress,
+		&def.CreatedAt,
+		&def.UpdatedAt,
+		&srcID,
+		&srcTenantID,
+		&srcName,
+		&srcFormat,
+		&srcHost,
+		&srcPort,
+		&srcUsername,
+		&srcDBName,
+		&srcStatus,
+		&srcCreatedAt,
+		&srcUpdatedAt,
+		&dstID,
+		&dstTenantID,
+		&dstName,
+		&dstFormat,
+		&dstHost,
+		&dstPort,
+		&dstUsername,
+		&dstDBName,
+		&dstStatus,
+		&dstCreatedAt,
+		&dstUpdatedAt,
+	); err != nil {
+		return def, err
+	}
+
+	if len(ast) > 0 {
+		def.AST = json.RawMessage(append([]byte(nil), ast...))
+	}
+	if len(progress) > 0 {
+		def.ProgressSnapshot = json.RawMessage(append([]byte(nil), progress...))
+	}
+
+	if srcConnID.Valid {
+		def.SourceConnectionID = srcConnID.String
+		if srcID.Valid {
+			def.SourceConnection = models.Connection{
+				ID:         srcID.String,
+				TenantID:   srcTenantID.String,
+				Name:       srcName.String,
+				DataFormat: srcFormat.String,
+				Host:       srcHost.String,
+				Port:       int(srcPort.Int64),
+				Username:   srcUsername.String,
+				DBName:     srcDBName.String,
+				Status:     srcStatus.String,
+			}
+			if srcCreatedAt.Valid {
+				def.SourceConnection.CreatedAt = srcCreatedAt.Time
+			}
+			if srcUpdatedAt.Valid {
+				def.SourceConnection.UpdatedAt = srcUpdatedAt.Time
+			}
+		}
+	}
+
+	if dstConnID.Valid {
+		def.DestinationConnectionID = dstConnID.String
+		if dstID.Valid {
+			def.DestinationConnection = models.Connection{
+				ID:         dstID.String,
+				TenantID:   dstTenantID.String,
+				Name:       dstName.String,
+				DataFormat: dstFormat.String,
+				Host:       dstHost.String,
+				Port:       int(dstPort.Int64),
+				Username:   dstUsername.String,
+				DBName:     dstDBName.String,
+				Status:     dstStatus.String,
+			}
+			if dstCreatedAt.Valid {
+				def.DestinationConnection.CreatedAt = dstCreatedAt.Time
+			}
+			if dstUpdatedAt.Valid {
+				def.DestinationConnection.UpdatedAt = dstUpdatedAt.Time
+			}
+		}
+	}
+
+	return def, nil
+}
+
+func (r *jobRepository) loadDefinitionSnapshots(jobDefID string) ([]models.JobDefinitionSnapshot, error) {
+	const query = `
+		SELECT id, job_definition_id, status, snapshot, created_at
+		FROM tenant.job_definition_snapshots
+		WHERE job_definition_id = $1
+		ORDER BY created_at DESC
+	`
+	rows, err := r.db.Query(query, jobDefID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snapshots []models.JobDefinitionSnapshot
+	for rows.Next() {
+		var snap models.JobDefinitionSnapshot
+		var payload []byte
+		if err := rows.Scan(&snap.ID, &snap.JobDefinitionID, &snap.Status, &payload, &snap.CreatedAt); err != nil {
+			return nil, err
+		}
+		if len(payload) > 0 {
+			snap.Snapshot = json.RawMessage(append([]byte(nil), payload...))
+		}
+		snapshots = append(snapshots, snap)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return snapshots, nil
+}
+
+type definitionMetrics struct {
+	totalRuns          int64
+	lastRunStatus      *string
+	totalBytes         int64
+	avgDurationSeconds *float64
+}
+
+func (r *jobRepository) fetchDefinitionStats(tenantID string) (map[string]definitionMetrics, error) {
+	const query = `
+		WITH ranked_executions AS (
+			SELECT
+				job_definition_id,
+				status,
+				bytes_transferred,
+				EXTRACT(EPOCH FROM (run_completed_at - run_started_at)) AS duration_seconds,
+				ROW_NUMBER() OVER (PARTITION BY job_definition_id ORDER BY created_at DESC) AS run_rank
+			FROM tenant.job_executions
+			WHERE tenant_id = $1
+		)
+		SELECT
+			job_definition_id,
+			COUNT(*) AS total_runs,
+			MAX(CASE WHEN run_rank = 1 THEN status END) AS last_run_status,
+			COALESCE(SUM(bytes_transferred), 0) AS total_bytes_transferred,
+			AVG(duration_seconds) AS avg_duration_seconds
+		FROM ranked_executions
+		GROUP BY job_definition_id
+	`
+	rows, err := r.db.Query(query, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	metrics := make(map[string]definitionMetrics)
+	for rows.Next() {
+		var (
+			jobDefID    string
+			totalRuns   sql.NullInt64
+			lastStatus  sql.NullString
+			totalBytes  sql.NullInt64
+			avgDuration sql.NullFloat64
+		)
+		if err := rows.Scan(&jobDefID, &totalRuns, &lastStatus, &totalBytes, &avgDuration); err != nil {
+			return nil, err
+		}
+		metric := definitionMetrics{}
+		if totalRuns.Valid {
+			metric.totalRuns = totalRuns.Int64
+		}
+		if lastStatus.Valid {
+			status := lastStatus.String
+			metric.lastRunStatus = &status
+		}
+		if totalBytes.Valid {
+			metric.totalBytes = totalBytes.Int64
+		}
+		if avgDuration.Valid {
+			value := avgDuration.Float64
+			metric.avgDurationSeconds = &value
+		}
+		metrics[jobDefID] = metric
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return metrics, nil
+}
+
+func (r *jobRepository) CrateDefinition(def models.JobDefinition) (models.JobDefinition, error) {
+	if err := r.validateTennantConnection(def.TenantID, def.SourceConnectionID); err != nil {
+		return def, err
+	}
+	if err := r.validateTennantConnection(def.TenantID, def.DestinationConnectionID); err != nil {
+		return def, err
+	}
+
+	def.Status = normalizeDefinitionStatus(def.Status)
+	if err := validateDefinitionStatus(def.Status); err != nil {
+		return def, err
+	}
+
+	var (
+		astPayload       interface{}
+		progressSnapshot interface{}
+	)
+	if len(def.AST) > 0 {
+		astPayload = []byte(def.AST)
+	}
+	if len(def.ProgressSnapshot) > 0 {
+		progressSnapshot = []byte(def.ProgressSnapshot)
+	}
+
+	query := `
+		INSERT INTO tenant.job_definitions (
+			tenant_id,
+			name,
+			description,
+			ast,
+			source_connection_id,
+			destination_connection_id,
+			status,
+			progress_snapshot
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id
+	`
+
+	if err := r.db.QueryRow(
+		query,
 		def.TenantID,
 		def.Name,
 		def.Description,
-		def.AST,
-		def.SourceConnectionID,
-		def.DestinationConnectionID,
-	).Scan(&def.ID, &def.CreatedAt, &def.UpdatedAt)
+		astPayload,
+		nullIfEmpty(def.SourceConnectionID),
+		nullIfEmpty(def.DestinationConnectionID),
+		def.Status,
+		progressSnapshot,
+	).Scan(&def.ID); err != nil {
+		return def, err
+	}
 
-	return def, err
+	if progressSnapshot != nil {
+		if err := r.recordDefinitionSnapshot(def.ID, def.Status, def.ProgressSnapshot); err != nil {
+			return def, err
+		}
+	}
+
+	return r.GetJobDefinitionByID(def.TenantID, def.ID)
 }
 
 func (r *jobRepository) ListDefinitions(tenantID string) ([]models.JobDefinition, error) {
-	query := `
-		SELECT
-			jd.id, jd.tenant_id, jd.name, jd.description, jd.ast,
-			jd.source_connection_id, jd.destination_connection_id,
-			sc.id, sc.tenant_id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.status, sc.created_at, sc.updated_at,
-			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.status, dc.created_at, dc.updated_at,
-			jd.created_at, jd.updated_at
-		FROM tenant.job_definitions jd
-		JOIN tenant.connections sc ON jd.source_connection_id = sc.id AND sc.deleted_at IS NULL
-		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id AND dc.deleted_at IS NULL
+	query := jobDefinitionSelectColumns + `
 		WHERE jd.tenant_id = $1
 		  AND jd.deleted_at IS NULL
 		ORDER BY jd.created_at DESC;
@@ -80,46 +483,132 @@ func (r *jobRepository) ListDefinitions(tenantID string) ([]models.JobDefinition
 
 	var definitions []models.JobDefinition
 	for rows.Next() {
-		var def models.JobDefinition
-		if err := rows.Scan(
-			&def.ID,
-			&def.TenantID,
-			&def.Name,
-			&def.Description,
-			&def.AST,
-			&def.SourceConnectionID,
-			&def.DestinationConnectionID,
-			&def.SourceConnection.ID,
-			&def.SourceConnection.TenantID,
-			&def.SourceConnection.Name,
-			&def.SourceConnection.DataFormat,
-			&def.SourceConnection.Host,
-			&def.SourceConnection.Port,
-			&def.SourceConnection.Username,
-			&def.SourceConnection.DBName,
-			&def.SourceConnection.Status,
-			&def.SourceConnection.CreatedAt,
-			&def.SourceConnection.UpdatedAt,
-			&def.DestinationConnection.ID,
-			&def.DestinationConnection.TenantID,
-			&def.DestinationConnection.Name,
-			&def.DestinationConnection.DataFormat,
-			&def.DestinationConnection.Host,
-			&def.DestinationConnection.Port,
-			&def.DestinationConnection.Username,
-			&def.DestinationConnection.DBName,
-			&def.DestinationConnection.Status,
-			&def.DestinationConnection.CreatedAt,
-			&def.DestinationConnection.UpdatedAt,
-			&def.CreatedAt,
-			&def.UpdatedAt,
-		); err != nil {
+		def, err := scanJobDefinition(rows)
+		if err != nil {
 			return nil, err
 		}
 		definitions = append(definitions, def)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	return definitions, nil
+}
+
+func (r *jobRepository) UpdateDefinition(tenantID, jobDefID string, update DefinitionUpdate) (models.JobDefinition, error) {
+	var result models.JobDefinition
+
+	if update.SourceConnectionID != nil {
+		src := strings.TrimSpace(*update.SourceConnectionID)
+		if err := r.validateTennantConnection(tenantID, src); err != nil {
+			return result, err
+		}
+		*update.SourceConnectionID = src
+	}
+	if update.DestinationConnectionID != nil {
+		dst := strings.TrimSpace(*update.DestinationConnectionID)
+		if err := r.validateTennantConnection(tenantID, dst); err != nil {
+			return result, err
+		}
+		*update.DestinationConnectionID = dst
+	}
+
+	var statusValue string
+	if update.Status != nil {
+		statusValue = normalizeDefinitionStatus(*update.Status)
+		if err := validateDefinitionStatus(statusValue); err != nil {
+			return result, err
+		}
+	}
+
+	setClauses := make([]string, 0, 7)
+	args := make([]interface{}, 0, 9)
+	idx := 1
+
+	if update.Name != nil {
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", idx))
+		args = append(args, *update.Name)
+		idx++
+	}
+	if update.Description != nil {
+		setClauses = append(setClauses, fmt.Sprintf("description = $%d", idx))
+		args = append(args, *update.Description)
+		idx++
+	}
+	if update.AST != nil {
+		var payload interface{}
+		if len(*update.AST) > 0 {
+			payload = []byte(*update.AST)
+		}
+		setClauses = append(setClauses, fmt.Sprintf("ast = $%d", idx))
+		args = append(args, payload)
+		idx++
+	}
+	if update.SourceConnectionID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("source_connection_id = $%d", idx))
+		args = append(args, nullIfEmpty(*update.SourceConnectionID))
+		idx++
+	}
+	if update.DestinationConnectionID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("destination_connection_id = $%d", idx))
+		args = append(args, nullIfEmpty(*update.DestinationConnectionID))
+		idx++
+	}
+	if update.Status != nil {
+		setClauses = append(setClauses, fmt.Sprintf("status = $%d", idx))
+		args = append(args, statusValue)
+		idx++
+	}
+	if update.ProgressSnapshot != nil {
+		var payload interface{}
+		if len(*update.ProgressSnapshot) > 0 {
+			payload = []byte(*update.ProgressSnapshot)
+		}
+		setClauses = append(setClauses, fmt.Sprintf("progress_snapshot = $%d", idx))
+		args = append(args, payload)
+		idx++
+	}
+
+	if len(setClauses) == 0 {
+		return r.GetJobDefinitionByID(tenantID, jobDefID)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE tenant.job_definitions
+		SET %s
+		WHERE id = $%d AND tenant_id = $%d AND deleted_at IS NULL
+	`, strings.Join(setClauses, ", "), idx, idx+1)
+
+	args = append(args, jobDefID, tenantID)
+
+	res, err := r.db.Exec(query, args...)
+	if err != nil {
+		return result, err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return result, err
+	}
+	if rowsAffected == 0 {
+		return result, errors.New("job definition not found")
+	}
+
+	if update.ProgressSnapshot != nil && len(*update.ProgressSnapshot) > 0 {
+		statusForSnapshot := statusValue
+		if statusForSnapshot == "" {
+			statusForSnapshot, err = r.getDefinitionStatus(tenantID, jobDefID)
+			if err != nil {
+				return result, err
+			}
+		}
+		if err := r.recordDefinitionSnapshot(jobDefID, statusForSnapshot, *update.ProgressSnapshot); err != nil {
+			return result, err
+		}
+	}
+
+	return r.GetJobDefinitionByID(tenantID, jobDefID)
 }
 
 func (r *jobRepository) CreateExecution(tenantID, jobDefID string) (models.JobExecution, error) {
@@ -127,16 +616,21 @@ func (r *jobRepository) CreateExecution(tenantID, jobDefID string) (models.JobEx
 	exec.JobDefinitionID = jobDefID
 	exec.TenantID = tenantID
 	exec.Status = "pending"
+	currentStatus, err := r.getDefinitionStatus(tenantID, jobDefID)
+	if err != nil {
+		return exec, err
+	}
+	if normalizeDefinitionStatus(currentStatus) != definitionStatusReady {
+		return exec, fmt.Errorf("%w: current status %s", ErrJobDefinitionNotReady, currentStatus)
+	}
+
 	query := `
 		INSERT INTO tenant.job_executions (tenant_id, job_definition_id, status, run_started_at, run_completed_at)
-		SELECT $1, $2, $3, NULL, NULL
-		FROM tenant.job_definitions
-		WHERE id = $2 AND tenant_id = $1 AND deleted_at IS NULL
+		VALUES ($1, $2, $3, NULL, NULL)
 		RETURNING id, tenant_id, created_at, updated_at
 	`
-	err := r.db.QueryRow(query, tenantID, jobDefID, exec.Status).
-		Scan(&exec.ID, &exec.TenantID, &exec.CreatedAt, &exec.UpdatedAt)
-	if err != nil {
+	if err := r.db.QueryRow(query, tenantID, jobDefID, exec.Status).
+		Scan(&exec.ID, &exec.TenantID, &exec.CreatedAt, &exec.UpdatedAt); err != nil {
 		return exec, err
 	}
 	return exec, nil
@@ -175,58 +669,23 @@ func (r *jobRepository) GetLastExecution(tenantID, jobDefID string) (models.JobE
 }
 
 func (r *jobRepository) GetJobDefinitionByID(tenantID, jobDefID string) (models.JobDefinition, error) {
-	query := `
-		SELECT
-			jd.id, jd.tenant_id, jd.name, jd.description, jd.ast,
-			jd.source_connection_id, jd.destination_connection_id,
-			sc.id, sc.tenant_id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.created_at, sc.updated_at, sc.status,
-			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.created_at, dc.updated_at, dc.status,
-			jd.created_at, jd.updated_at
-		FROM tenant.job_definitions jd
-		JOIN tenant.connections sc ON jd.source_connection_id = sc.id AND sc.deleted_at IS NULL
-		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id AND dc.deleted_at IS NULL
-		WHERE jd.id = $1 AND jd.tenant_id = $2 AND jd.deleted_at IS NULL;
+	query := jobDefinitionSelectColumns + `
+		WHERE jd.id = $1 AND jd.tenant_id = $2 AND jd.deleted_at IS NULL
 	`
-	var def models.JobDefinition
-	err := r.db.QueryRow(query, jobDefID, tenantID).Scan(
-		&def.ID,
-		&def.TenantID,
-		&def.Name,
-		&def.Description,
-		&def.AST,
-		&def.SourceConnectionID,
-		&def.DestinationConnectionID,
-		&def.SourceConnection.ID,
-		&def.SourceConnection.TenantID,
-		&def.SourceConnection.Name,
-		&def.SourceConnection.DataFormat,
-		&def.SourceConnection.Host,
-		&def.SourceConnection.Port,
-		&def.SourceConnection.Username,
-		&def.SourceConnection.DBName,
-		&def.SourceConnection.CreatedAt,
-		&def.SourceConnection.UpdatedAt,
-		&def.SourceConnection.Status,
-		&def.DestinationConnection.ID,
-		&def.DestinationConnection.TenantID,
-		&def.DestinationConnection.Name,
-		&def.DestinationConnection.DataFormat,
-		&def.DestinationConnection.Host,
-		&def.DestinationConnection.Port,
-		&def.DestinationConnection.Username,
-		&def.DestinationConnection.DBName,
-		&def.DestinationConnection.CreatedAt,
-		&def.DestinationConnection.UpdatedAt,
-		&def.DestinationConnection.Status,
-		&def.CreatedAt,
-		&def.UpdatedAt,
-	)
+	row := r.db.QueryRow(query, jobDefID, tenantID)
+	def, err := scanJobDefinition(row)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return def, errors.New("job definition not found")
 		}
 		return def, err
 	}
+
+	snapshots, err := r.loadDefinitionSnapshots(jobDefID)
+	if err != nil {
+		return def, err
+	}
+	def.ProgressSnapshots = snapshots
 	return def, nil
 }
 
@@ -487,94 +946,27 @@ func (r *jobRepository) SetExecutionComplete(tenantID, execID string, status str
 
 // Retrieves all job definitions along with their execution stats.
 func (r *jobRepository) ListJobDefinitionsWithStats(tenantID string) ([]models.JobDefinitionStat, error) {
-	const query = `
-		WITH ranked_executions AS (
-		SELECT
-			job_definition_id,
-			status,
-			bytes_transferred,
-			EXTRACT(EPOCH FROM (run_completed_at - run_started_at)) AS duration_seconds,
-			ROW_NUMBER() OVER(PARTITION BY job_definition_id ORDER BY created_at DESC) as run_rank
-		FROM
-			tenant.job_executions
-		WHERE tenant_id = $1
-		)
-		SELECT
-			jd.id, jd.tenant_id, jd.name, jd.description,
-			jd.source_connection_id, jd.destination_connection_id,
-			sc.id, sc.tenant_id, sc.name, sc.data_format, sc.host, sc.port, sc.username, sc.db_name, sc.status,
-			dc.id, dc.tenant_id, dc.name, dc.data_format, dc.host, dc.port, dc.username, dc.db_name, dc.status,
-			jd.created_at, jd.updated_at,
-		COALESCE(stats.total_runs, 0) AS total_runs,
-		stats.last_run_status,
-		COALESCE(stats.total_bytes_transferred, 0) AS total_bytes_transferred,
-		stats.avg_duration_seconds
-		FROM
-		tenant.job_definitions jd
-		JOIN tenant.connections sc ON jd.source_connection_id = sc.id AND sc.deleted_at IS NULL
-		JOIN tenant.connections dc ON jd.destination_connection_id = dc.id AND dc.deleted_at IS NULL
-		LEFT JOIN (
-		SELECT
-			job_definition_id,
-			COUNT(*) AS total_runs,
-			MAX(CASE WHEN run_rank = 1 THEN status END) AS last_run_status,
-			SUM(bytes_transferred) AS total_bytes_transferred,
-			AVG(duration_seconds) AS avg_duration_seconds
-		FROM
-			ranked_executions
-		GROUP BY
-			job_definition_id
-		) stats ON jd.id = stats.job_definition_id
-		WHERE jd.tenant_id = $1
-		  AND jd.deleted_at IS NULL
-		ORDER BY
-		jd.created_at DESC;
-	`
-
-	results := []models.JobDefinitionStat{}
-	rows, err := r.db.Query(query, tenantID)
+	definitions, err := r.ListDefinitions(tenantID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var stat models.JobDefinitionStat
-		if err := rows.Scan(
-			&stat.JobDefinition.ID,
-			&stat.JobDefinition.TenantID,
-			&stat.JobDefinition.Name,
-			&stat.JobDefinition.Description,
-			&stat.JobDefinition.SourceConnectionID,
-			&stat.JobDefinition.DestinationConnectionID,
-			&stat.JobDefinition.SourceConnection.ID,
-			&stat.JobDefinition.SourceConnection.TenantID,
-			&stat.JobDefinition.SourceConnection.Name,
-			&stat.JobDefinition.SourceConnection.DataFormat,
-			&stat.JobDefinition.SourceConnection.Host,
-			&stat.JobDefinition.SourceConnection.Port,
-			&stat.JobDefinition.SourceConnection.Username,
-			&stat.JobDefinition.SourceConnection.DBName,
-			&stat.JobDefinition.SourceConnection.Status,
-			&stat.JobDefinition.DestinationConnection.ID,
-			&stat.JobDefinition.DestinationConnection.TenantID,
-			&stat.JobDefinition.DestinationConnection.Name,
-			&stat.JobDefinition.DestinationConnection.DataFormat,
-			&stat.JobDefinition.DestinationConnection.Host,
-			&stat.JobDefinition.DestinationConnection.Port,
-			&stat.JobDefinition.DestinationConnection.Username,
-			&stat.JobDefinition.DestinationConnection.DBName,
-			&stat.JobDefinition.DestinationConnection.Status,
-			&stat.JobDefinition.CreatedAt,
-			&stat.JobDefinition.UpdatedAt,
-			&stat.TotalRuns,
-			&stat.LastRunStatus,
-			&stat.TotalBytesTransferred,
-			&stat.AvgDurationSeconds); err != nil {
-			return nil, err
-		}
-		results = append(results, stat)
+	metrics, err := r.fetchDefinitionStats(tenantID)
+	if err != nil {
+		return nil, err
 	}
 
-	return results, nil
+	stats := make([]models.JobDefinitionStat, 0, len(definitions))
+	for _, def := range definitions {
+		stat := models.JobDefinitionStat{JobDefinition: def}
+		if metric, ok := metrics[def.ID]; ok {
+			stat.TotalRuns = metric.totalRuns
+			stat.TotalBytesTransferred = metric.totalBytes
+			stat.LastRunStatus = metric.lastRunStatus
+			stat.AvgDurationSeconds = metric.avgDurationSeconds
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, nil
 }

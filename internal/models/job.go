@@ -6,17 +6,20 @@ import (
 )
 
 type JobDefinition struct {
-	ID                      string          `json:"id" db:"id"`
-	TenantID                string          `json:"tenant_id" db:"tenant_id"`
-	Name                    string          `json:"name" db:"name"`
-	Description             string          `json:"description" db:"description"`
-	AST                     json.RawMessage `json:"ast" db:"ast"`
-	SourceConnectionID      string          `json:"-" db:"source_connection_id"`
-	DestinationConnectionID string          `json:"-" db:"destination_connection_id"`
-	SourceConnection        Connection      `json:"source_connection"`
-	DestinationConnection   Connection      `json:"destination_connection"`
-	CreatedAt               time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt               time.Time       `json:"updated_at" db:"updated_at"`
+	ID                      string                  `json:"id" db:"id"`
+	TenantID                string                  `json:"tenant_id" db:"tenant_id"`
+	Name                    string                  `json:"name" db:"name"`
+	Description             string                  `json:"description" db:"description"`
+	AST                     json.RawMessage         `json:"ast" db:"ast"`
+	SourceConnectionID      string                  `json:"-" db:"source_connection_id"`
+	DestinationConnectionID string                  `json:"-" db:"destination_connection_id"`
+	SourceConnection        Connection              `json:"source_connection"`
+	DestinationConnection   Connection              `json:"destination_connection"`
+	Status                  string                  `json:"status" db:"status"`
+	ProgressSnapshot        json.RawMessage         `json:"progress_snapshot,omitempty" db:"progress_snapshot"`
+	ProgressSnapshots       []JobDefinitionSnapshot `json:"progress_snapshots,omitempty"`
+	CreatedAt               time.Time               `json:"created_at" db:"created_at"`
+	UpdatedAt               time.Time               `json:"updated_at" db:"updated_at"`
 }
 
 type JobExecution struct {
@@ -32,4 +35,12 @@ type JobExecution struct {
 	Logs             *string    `json:"logs" db:"logs"`
 	RecordsProcessed *int64     `json:"records_processed" db:"records_processed"`
 	BytesTransferred *int64     `json:"bytes_transferred" db:"bytes_transferred"`
+}
+
+type JobDefinitionSnapshot struct {
+	ID              string          `json:"id" db:"id"`
+	JobDefinitionID string          `json:"job_definition_id" db:"job_definition_id"`
+	Status          string          `json:"status" db:"status"`
+	Snapshot        json.RawMessage `json:"snapshot" db:"snapshot"`
+	CreatedAt       time.Time       `json:"created_at" db:"created_at"`
 }
