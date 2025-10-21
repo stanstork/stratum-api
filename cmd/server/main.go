@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/docker/docker/client"
 	h "github.com/gorilla/handlers"
 	"github.com/stanstork/stratum-api/internal/config"
 	"github.com/stanstork/stratum-api/internal/handlers"
@@ -18,159 +20,169 @@ import (
 	"github.com/stanstork/stratum-api/internal/notification"
 	"github.com/stanstork/stratum-api/internal/repository"
 	"github.com/stanstork/stratum-api/internal/routes"
-	"github.com/stanstork/stratum-api/internal/worker"
+	"github.com/stanstork/stratum-api/internal/temporal"
+	"github.com/stanstork/stratum-api/internal/temporal/activities"
+	"github.com/stanstork/stratum-api/internal/temporal/workflows"
+
+	_ "github.com/lib/pq" // PostgreSQL driver
+	tc "go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
 )
 
+type application struct {
+	config         *config.Config
+	db             *sql.DB
+	temporalClient tc.Client
+}
+
 func main() {
-	// load configuration
-	cfg := loadConfig()
+	// Load configuration.
+	cfg := config.Load()
 
-	// initialize database
-	db := initDatabase(cfg)
-	defer db.Close()
-
-	// applies any pending database migrations.
-	migration.RunMigrations(cfg.DatabaseURL)
-
-	// initialize HTTP handlers and router
-	router := initRouter(db, cfg)
-
-	// set up logging middleware
-	router = middleware.LoggingMiddleware(router)
-
-	// set up CORS options
-	corsOpts := []h.CORSOption{
-		h.AllowedOrigins([]string{"http://localhost:3000"}),
-		h.AllowedMethods([]string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),
-		h.AllowedHeaders([]string{"Content-Type", "Authorization"}),
-		h.AllowCredentials(),
-	}
-
-	// wrap router with the CORS middleware
-	corsHandler := h.CORS(corsOpts...)(router)
-
-	// initialize and start the migration worker
-	_, workerCancel := initWorker(db, *cfg)
-	defer workerCancel()
-
-	// start HTTP server and handle graceful shutdown
-	startServer(corsHandler, cfg.ServerPort, workerCancel)
-
-	log.Println("Application terminated.")
-}
-
-// loadConfig loads and returns the application configuration.
-func loadConfig() *config.Config {
-	return config.Load()
-}
-
-// initDatabase opens a PostgreSQL connection and returns it.
-func initDatabase(cfg *config.Config) *sql.DB {
+	// Initialize database connection.
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	return db
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	// Run database migrations.
+	migration.RunMigrations(cfg.DatabaseURL)
+
+	// Initialize Temporal client.
+	temporalClient, err := tc.Dial(tc.Options{})
+	if err != nil {
+		log.Fatalf("Unable to create Temporal client: %v", err)
+	}
+	defer temporalClient.Close()
+
+	// Create the application instance.
+	app := &application{
+		config:         cfg,
+		db:             db,
+		temporalClient: temporalClient,
+	}
+
+	// Start the Temporal worker in a separate goroutine.
+	temporalWorker := app.startTemporalWorker()
+
+	// Initialize the HTTP router and middleware.
+	router := app.initRouter()
+	loggedRouter := middleware.LoggingMiddleware(router)
+	corsHandler := h.CORS(
+		h.AllowedOrigins([]string{"http://localhost:3000"}),
+		h.AllowedMethods([]string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),
+		h.AllowedHeaders([]string{"Content-Type", "Authorization"}),
+		h.AllowCredentials(),
+	)(loggedRouter)
+
+	// Start the HTTP server and handle graceful shutdown.
+	app.startServer(corsHandler, temporalWorker)
+
+	log.Println("Application terminated.")
 }
 
-// initRouter sets up authentication, job handlers, and returns the HTTP router.
-func initRouter(db *sql.DB, cfg *config.Config) http.Handler {
-	jobRepo := repository.NewJobRepository(db)
-	connRepo := repository.NewConnectionRepository(db)
-	userRepo := repository.NewUserRepository(db)
-	tenantRepo := repository.NewTenantRepository(db)
-	inviteRepo := repository.NewInviteRepository(db)
+// initRouter sets up all HTTP handlers and returns the router.
+func (app *application) initRouter() http.Handler {
+	// Repositories
+	jobRepo := repository.NewJobRepository(app.db)
+	connRepo := repository.NewConnectionRepository(app.db)
+	userRepo := repository.NewUserRepository(app.db)
+	tenantRepo := repository.NewTenantRepository(app.db)
+	inviteRepo := repository.NewInviteRepository(app.db)
 
-	authHandler := handlers.NewAuthHandler(db, cfg)
-	jobHandler := handlers.NewJobHandler(jobRepo)
-	connHandler := handlers.NewConnectionHandler(connRepo, cfg.Worker.EngineContainer)
-	metaHandler := handlers.NewMetadataHandler(connRepo, cfg.Worker.EngineContainer)
-	reportHandler := handlers.NewReportHandler(connRepo, jobRepo, cfg.Worker.EngineContainer)
-	tenantHandler := handlers.NewTenantHandler(tenantRepo, userRepo)
-	inviteMailer, err := notification.NewSMTPInviteMailer(cfg.Email)
+	// Mailer for invites
+	inviteMailer, err := notification.NewSMTPInviteMailer(app.config.Email)
 	if err != nil {
 		log.Fatalf("failed to configure invite mailer: %v", err)
 	}
-	inviteHandler := handlers.NewInviteHandler(inviteRepo, tenantRepo, userRepo, inviteMailer, cfg.Email.InviteURLTemplate)
+
+	// Handlers
+	authHandler := handlers.NewAuthHandler(app.db, app.config)
+	jobHandler := handlers.NewJobHandler(jobRepo, app.temporalClient)
+	connHandler := handlers.NewConnectionHandler(connRepo, app.config.Worker.EngineImage)
+	metaHandler := handlers.NewMetadataHandler(connRepo, app.config.Worker.EngineImage)
+	reportHandler := handlers.NewReportHandler(connRepo, jobRepo, app.config.Worker.EngineImage)
+	tenantHandler := handlers.NewTenantHandler(tenantRepo, userRepo)
+	inviteHandler := handlers.NewInviteHandler(inviteRepo, tenantRepo, userRepo, inviteMailer, app.config.Email.InviteURLTemplate)
 
 	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler, inviteHandler)
 }
 
-// initWorker constructs, starts, and returns the worker’s context cancel function.
-func initWorker(db *sql.DB, cfg config.Config) (context.Context, context.CancelFunc) {
-	jobRepo := repository.NewJobRepository(db)
-	connRepo := repository.NewConnectionRepository(db)
-	workerCfg := &worker.WorkerConfig{
-		DB:                   db,
-		JobRepo:              jobRepo,
-		ConnRepo:             connRepo,
-		PollInterval:         cfg.Worker.PollInterval,
-		EngineImage:          cfg.Worker.EngineImage,
-		JWTSigningKey:        []byte(cfg.JWTSecret),
-		TempDir:              cfg.Worker.TempDir,
-		ContainerCPULimit:    cfg.Worker.ContainerCPULimit,
-		ContainerMemoryLimit: cfg.Worker.ContainerMemoryLimit,
-	}
-
-	w, err := worker.NewWorker(*workerCfg)
+func (app *application) startTemporalWorker() worker.Worker {
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Fatalf("Failed to create worker: %v", err)
+		log.Fatalf("Failed to create Docker client: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	activityImpl := &activities.Activities{
+		JobRepo:           repository.NewJobRepository(app.db),
+		ConnRepo:          repository.NewConnectionRepository(app.db),
+		DockerClient:      dockerClient,
+		EngineImage:       app.config.Worker.EngineImage,
+		JWTSigningKey:     []byte(app.config.JWTSecret),
+		TempDir:           app.config.Worker.TempDir,
+		ContainerCPULimit: app.config.Worker.ContainerCPULimit,
+		ContainerMemLimit: app.config.Worker.ContainerMemoryLimit,
+	}
+
+	w := worker.New(app.temporalClient, temporal.TaskQueueName, worker.Options{})
+
+	w.RegisterWorkflow(workflows.ExecutionWorkflow)
+	w.RegisterActivity(activityImpl)
+
+	// Start the worker in a goroutine so it doesn't block.
 	go func() {
-		if err := w.Start(ctx); err != nil && err != context.Canceled {
-			log.Printf("Worker stopped with error: %v", err)
+		log.Println("Starting Temporal worker...")
+		if err := w.Run(worker.InterruptCh()); err != nil {
+			log.Fatalf("Unable to start worker: %v", err)
 		}
 	}()
 
-	return ctx, cancel
+	return w
 }
 
-// startServer launches the HTTP server and waits for OS signals.
-// When a shutdown signal arrives, it gracefully stops the server and calls workerCancel.
-func startServer(handler http.Handler, port string, workerCancel context.CancelFunc) {
-	addr := ":" + port
+// startServer launches the HTTP server and handles graceful shutdown.
+func (app *application) startServer(handler http.Handler, temporalWorker worker.Worker) {
 	server := &http.Server{
-		Addr:    addr,
+		Addr:    ":" + app.config.ServerPort,
 		Handler: handler,
 	}
 
 	// Channel to listen for server errors
 	serverErrCh := make(chan error, 1)
 	go func() {
-		log.Printf("Server listening on %s", addr)
-		serverErrCh <- server.ListenAndServe()
+		log.Printf("Server listening on %s", server.Addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrCh <- err
+		}
 	}()
 
-	// Channel to listen for OS interrupt or termination signals
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	// Wait for an interrupt signal or a server error.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
-	// Wait for either a server error or a shutdown signal
 	select {
-	case sig := <-stop:
-		log.Printf("Received signal: %v. initiating shutdown...", sig)
+	case sig := <-quit:
+		log.Printf("Received signal: %s. Shutting down...", sig)
 	case err := <-serverErrCh:
-		if err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
-		}
+		log.Printf("Server error: %v. Shutting down...", err)
 	}
 
-	// Begin graceful shutdown with a timeout context
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Gracefully shut down the HTTP server.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Http server shutdown error: %v", err)
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
 	} else {
-		log.Println("Http server shutdown complete")
+		log.Println("HTTP server shutdown complete.")
 	}
 
-	// Stop the worker’s polling loop
-	workerCancel()
-
-	// Give the worker a moment to finish any ongoing job
-	time.Sleep(2 * time.Second)
-	log.Println("Worker shutdown complete")
+	// Stop the Temporal worker.
+	log.Println("Stopping Temporal worker...")
+	temporalWorker.Stop()
+	log.Println("Temporal worker stopped.")
 }

@@ -13,10 +13,13 @@ import (
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/repository"
+
+	tc "go.temporal.io/sdk/client"
 )
 
 type JobHandler struct {
-	repo repository.JobRepository
+	repo           repository.JobRepository
+	temporalClient tc.Client
 }
 
 type createDefinitionPayload struct {
@@ -58,9 +61,10 @@ type resolvedDefinition struct {
 	ProgressSnapshot        json.RawMessage
 }
 
-func NewJobHandler(repo repository.JobRepository) *JobHandler {
+func NewJobHandler(repo repository.JobRepository, temporalClient tc.Client) *JobHandler {
 	return &JobHandler{
-		repo: repo,
+		repo:           repo,
+		temporalClient: temporalClient,
 	}
 }
 
