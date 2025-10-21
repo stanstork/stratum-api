@@ -37,7 +37,7 @@ func ExecutionWorkflow(ctx workflow.Context, params temporal.ExecutionParams) er
 	}()
 
 	// Step 0: Create job execution record
-	err := workflow.ExecuteActivity(ctx, a.CreateExecutionActivity, params.TenantID, params.JobDefinitionID).Get(ctx, nil)
+	err := workflow.ExecuteActivity(ctx, a.CreateExecutionActivity, params.TenantID, params.JobDefinitionID, params.ExecutionID).Get(ctx, nil)
 	if err != nil {
 		logger.Error("Failed to create job execution record.", "error", err)
 		return err

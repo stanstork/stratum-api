@@ -23,7 +23,7 @@ type JobRepository interface {
 	ListJobDefinitionsWithStats(tenantID string) ([]models.JobDefinitionStat, error)
 
 	// JobExecution methods
-	CreateExecution(tenantID, jobDefID string) (models.JobExecution, error)
+	CreateExecution(tenantID, jobDefID, executionID string) (models.JobExecution, error)
 	GetLastExecution(tenantID, jobDefID string) (models.JobExecution, error)
 	UpdateExecution(tenantID, execID string, status string, errorMessage string, logs string) (int64, error)
 	ListExecutions(tenantID string, limit, offset int) ([]models.JobExecution, error)
@@ -611,8 +611,9 @@ func (r *jobRepository) UpdateDefinition(tenantID, jobDefID string, update Defin
 	return r.GetJobDefinitionByID(tenantID, jobDefID)
 }
 
-func (r *jobRepository) CreateExecution(tenantID, jobDefID string) (models.JobExecution, error) {
+func (r *jobRepository) CreateExecution(tenantID, jobDefID, executionID string) (models.JobExecution, error) {
 	var exec models.JobExecution
+	exec.ID = executionID
 	exec.JobDefinitionID = jobDefID
 	exec.TenantID = tenantID
 	exec.Status = "pending"
@@ -625,12 +626,12 @@ func (r *jobRepository) CreateExecution(tenantID, jobDefID string) (models.JobEx
 	}
 
 	query := `
-		INSERT INTO tenant.job_executions (tenant_id, job_definition_id, status, run_started_at, run_completed_at)
-		VALUES ($1, $2, $3, NULL, NULL)
-		RETURNING id, tenant_id, created_at, updated_at
+		INSERT INTO tenant.job_executions (id, tenant_id, job_definition_id, status, run_started_at, run_completed_at)
+		VALUES ($1, $2, $3, $4, NULL, NULL)
+		RETURNING created_at, updated_at
 	`
-	if err := r.db.QueryRow(query, tenantID, jobDefID, exec.Status).
-		Scan(&exec.ID, &exec.TenantID, &exec.CreatedAt, &exec.UpdatedAt); err != nil {
+	if err := r.db.QueryRow(query, executionID, tenantID, jobDefID, exec.Status).
+		Scan(&exec.CreatedAt, &exec.UpdatedAt); err != nil {
 		return exec, err
 	}
 	return exec, nil

@@ -43,11 +43,11 @@ var dataFormatMap = map[string]string{
 	"mysql":      "MySql",
 }
 
-func (a *Activities) CreateExecutionActivity(ctx context.Context, tenantID, jobDefID string) error {
+func (a *Activities) CreateExecutionActivity(ctx context.Context, tenantID, jobDefID, executionID string) error {
 	logger := activity.GetLogger(ctx)
-	logger.Info("Creating job execution record in database", "tenantID", tenantID, "jobDefID", jobDefID)
+	logger.Info("Creating job execution record in database", "tenantID", tenantID, "jobDefID", jobDefID, "executionID", executionID)
 
-	_, err := a.JobRepo.CreateExecution(tenantID, jobDefID)
+	_, err := a.JobRepo.CreateExecution(tenantID, jobDefID, executionID)
 	if err != nil {
 		logger.Error("Failed to create execution record in database", "error", err)
 	}

@@ -5,8 +5,8 @@ import "time"
 // TaskQueueName is the name of the Temporal task queue used for Stratum migration workflows.
 const TaskQueueName = "STRATUM_MIGRATION"
 
-// MigrationWorkflowIDPrefix is the prefix used for Stratum migration workflow IDs.
-const MigrationWorkflowIDPrefix = "stratum-migration-"
+// ExecWorkflowIDPrefix is the prefix used for Stratum migration workflow IDs.
+const ExecWorkflowIDPrefix = "stratum-migration-"
 
 // DefaultActivityTimeout is the default timeout duration for Temporal activities in Stratum migration workflows.
 const DefaultActivityTimeout = 5 * time.Minute

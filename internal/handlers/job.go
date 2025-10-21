@@ -1,18 +1,23 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/repository"
+	"github.com/stanstork/stratum-api/internal/temporal"
+	"github.com/stanstork/stratum-api/internal/temporal/workflows"
 
 	tc "go.temporal.io/sdk/client"
 )
@@ -411,21 +416,35 @@ func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jobDefID := mux.Vars(r)["jobID"]
-	execution, err := h.repo.CreateExecution(tid, jobDefID)
+	execID := uuid.NewString()
+
+	// Set up the workflow options.
+	workflowOptions := tc.StartWorkflowOptions{
+		ID:        fmt.Sprintf("%s%s", temporal.ExecWorkflowIDPrefix, execID),
+		TaskQueue: temporal.TaskQueueName,
+	}
+
+	// Define the parameters for the workflow.
+	params := temporal.ExecutionParams{
+		TenantID:        tid,
+		ExecutionID:     execID,
+		JobDefinitionID: jobDefID,
+	}
+
+	// Execute the workflow. This call is asynchronous.
+	we, err := h.temporalClient.ExecuteWorkflow(context.Background(), workflowOptions, workflows.ExecutionWorkflow, params)
 	if err != nil {
-		if isNotFound(err) {
-			http.Error(w, "Job definition not found", http.StatusNotFound)
-			return
-		}
-		if errors.Is(err, repository.ErrJobDefinitionNotReady) {
-			http.Error(w, "Job definition must be READY before execution", http.StatusConflict)
-			return
-		}
-		http.Error(w, "Failed to create job execution: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed to start job execution workflow: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, execution)
+	response := map[string]string{
+		"message":     "Job execution started.",
+		"executionID": execID,
+		"workflowID":  we.GetID(),
+		"runID":       we.GetRunID(),
+	}
+	writeJSON(w, http.StatusAccepted, response)
 }
 
 func (h *JobHandler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
