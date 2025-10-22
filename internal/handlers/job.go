@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/models"
+	"github.com/stanstork/stratum-api/internal/notification"
 	"github.com/stanstork/stratum-api/internal/repository"
 	"github.com/stanstork/stratum-api/internal/temporal"
 	"github.com/stanstork/stratum-api/internal/temporal/workflows"
@@ -26,6 +27,7 @@ import (
 type JobHandler struct {
 	repo           repository.JobRepository
 	temporalClient tc.Client
+	notifier       notification.Service
 	logger         zerolog.Logger
 }
 
@@ -68,10 +70,11 @@ type resolvedDefinition struct {
 	ProgressSnapshot        json.RawMessage
 }
 
-func NewJobHandler(repo repository.JobRepository, temporalClient tc.Client, logger zerolog.Logger) *JobHandler {
+func NewJobHandler(repo repository.JobRepository, temporalClient tc.Client, notifier notification.Service, logger zerolog.Logger) *JobHandler {
 	return &JobHandler{
 		repo:           repo,
 		temporalClient: temporalClient,
+		notifier:       notifier,
 		logger:         logger,
 	}
 }
@@ -387,6 +390,12 @@ func (h *JobHandler) MarkDefinitionReady(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if h.notifier != nil {
+		if err := h.notifier.NotifyValidationComplete(r.Context(), tid, updatedDef.ID, updatedDef.Name); err != nil {
+			h.logger.Warn().Err(err).Str("job_definition_id", updatedDef.ID).Msg("failed to publish validation notification")
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"valid":      true,
 		"definition": updatedDef,
@@ -580,6 +589,40 @@ func (h *JobHandler) SetExecutionComplete(w http.ResponseWriter, r *http.Request
 		}
 		http.Error(w, "Failed to set execution complete: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if h.notifier != nil {
+		exec, err := h.repo.GetExecution(tid, execID)
+		if err != nil {
+			h.logger.Warn().Err(err).Str("execution_id", execID).Msg("failed to reload execution for notification")
+		} else {
+			def, defErr := h.repo.GetJobDefinitionByID(tid, exec.JobDefinitionID)
+			if defErr != nil {
+				h.logger.Warn().Err(defErr).Str("job_definition_id", exec.JobDefinitionID).Msg("failed to load job definition for notification")
+			} else {
+				status := strings.ToLower(strings.TrimSpace(exec.Status))
+				switch status {
+				case "succeeded":
+					var recordsProcessed, bytesTransferred int64
+					if exec.RecordsProcessed != nil {
+						recordsProcessed = *exec.RecordsProcessed
+					}
+					if exec.BytesTransferred != nil {
+						bytesTransferred = *exec.BytesTransferred
+					}
+					if err := h.notifier.NotifyExecutionSucceeded(r.Context(), tid, exec.JobDefinitionID, execID, def.Name, recordsProcessed, bytesTransferred); err != nil {
+						h.logger.Warn().Err(err).Str("execution_id", execID).Msg("failed to publish execution success notification")
+					}
+				case "failed":
+					reason := ""
+					if exec.ErrorMessage != nil {
+						reason = *exec.ErrorMessage
+					}
+					if err := h.notifier.NotifyExecutionFailed(r.Context(), tid, exec.JobDefinitionID, execID, def.Name, reason); err != nil {
+						h.logger.Warn().Err(err).Str("execution_id", execID).Msg("failed to publish execution failure notification")
+					}
+				}
+			}
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

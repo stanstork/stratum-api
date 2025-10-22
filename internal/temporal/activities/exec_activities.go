@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -21,6 +22,8 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"github.com/stanstork/stratum-api/internal/models"
+	"github.com/stanstork/stratum-api/internal/notification"
 	"github.com/stanstork/stratum-api/internal/repository"
 	"github.com/stanstork/stratum-api/internal/temporal"
 )
@@ -34,6 +37,7 @@ type Activities struct {
 	TempDir           string
 	ContainerCPULimit int64
 	ContainerMemLimit int64
+	Notifier          notification.Service
 }
 
 var dataFormatMap = map[string]string{
@@ -47,11 +51,22 @@ func (a *Activities) CreateExecutionActivity(ctx context.Context, tenantID, jobD
 	logger := activity.GetLogger(ctx)
 	logger.Info("Creating job execution record in database", "tenantID", tenantID, "jobDefID", jobDefID, "executionID", executionID)
 
-	_, err := a.JobRepo.CreateExecution(tenantID, jobDefID, executionID)
+	exec, err := a.JobRepo.CreateExecution(tenantID, jobDefID, executionID)
 	if err != nil {
 		logger.Error("Failed to create execution record in database", "error", err)
+		return err
 	}
-	return err
+
+	if a.Notifier != nil {
+		def, defErr := a.JobRepo.GetJobDefinitionByID(tenantID, jobDefID)
+		if defErr != nil {
+			logger.Warn("Unable to load job definition for notification", "error", defErr)
+		} else if notifyErr := a.Notifier.NotifyExecutionStarted(ctx, tenantID, exec.JobDefinitionID, executionID, def.Name); notifyErr != nil {
+			logger.Warn("Failed to publish execution started notification", "error", notifyErr)
+		}
+	}
+
+	return nil
 }
 
 func (a *Activities) UpdateJobStatusActivity(ctx context.Context, tenantID, executionID, status, message, logs string) error {
@@ -60,7 +75,10 @@ func (a *Activities) UpdateJobStatusActivity(ctx context.Context, tenantID, exec
 	_, err := a.JobRepo.UpdateExecution(tenantID, executionID, status, message, logs)
 	if err != nil {
 		logger.Error("Failed to update job status", "error", err)
+		return err
 	}
+
+	a.emitStatusNotification(ctx, tenantID, executionID, status, message)
 	return err
 }
 
@@ -257,6 +275,58 @@ func (a *Activities) CleanupActivity(ctx context.Context, filePath string) error
 		return err // The error will be logged by Temporal, but won't fail the workflow.
 	}
 	return nil
+}
+
+func (a *Activities) emitStatusNotification(ctx context.Context, tenantID, executionID, status, message string) {
+	if a.Notifier == nil {
+		return
+	}
+
+	logger := activity.GetLogger(ctx)
+
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed":
+		exec, def, err := a.loadExecutionDetails(tenantID, executionID)
+		if err != nil {
+			logger.Warn("Unable to load execution for failure notification", "error", err)
+			return
+		}
+		reason := strings.TrimSpace(message)
+		if reason == "" && exec.ErrorMessage != nil {
+			reason = strings.TrimSpace(*exec.ErrorMessage)
+		}
+		if notifyErr := a.Notifier.NotifyExecutionFailed(ctx, tenantID, exec.JobDefinitionID, executionID, def.Name, reason); notifyErr != nil {
+			logger.Warn("Failed to publish execution failed notification", "error", notifyErr)
+		}
+	case "succeeded":
+		exec, def, err := a.loadExecutionDetails(tenantID, executionID)
+		if err != nil {
+			logger.Warn("Unable to load execution for success notification", "error", err)
+			return
+		}
+		var recordsProcessed, bytesTransferred int64
+		if exec.RecordsProcessed != nil {
+			recordsProcessed = *exec.RecordsProcessed
+		}
+		if exec.BytesTransferred != nil {
+			bytesTransferred = *exec.BytesTransferred
+		}
+		if notifyErr := a.Notifier.NotifyExecutionSucceeded(ctx, tenantID, exec.JobDefinitionID, executionID, def.Name, recordsProcessed, bytesTransferred); notifyErr != nil {
+			logger.Warn("Failed to publish execution success notification", "error", notifyErr)
+		}
+	}
+}
+
+func (a *Activities) loadExecutionDetails(tenantID, executionID string) (models.JobExecution, models.JobDefinition, error) {
+	exec, err := a.JobRepo.GetExecution(tenantID, executionID)
+	if err != nil {
+		return exec, models.JobDefinition{}, err
+	}
+	def, err := a.JobRepo.GetJobDefinitionByID(tenantID, exec.JobDefinitionID)
+	if err != nil {
+		return exec, models.JobDefinition{}, err
+	}
+	return exec, def, nil
 }
 
 func generateJobToken(execID string, tenantID string, signingKey []byte) (string, error) {

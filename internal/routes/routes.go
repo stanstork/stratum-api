@@ -16,7 +16,8 @@ func NewRouter(auth *handlers.AuthHandler,
 	meta *handlers.MetadataHandler,
 	report *handlers.ReportHandler,
 	tenant *handlers.TenantHandler,
-	invite *handlers.InviteHandler) *mux.Router {
+	invite *handlers.InviteHandler,
+	notification *handlers.NotificationHandler) *mux.Router {
 
 	router := mux.NewRouter().StrictSlash(true)
 
@@ -134,6 +135,9 @@ func NewRouter(auth *handlers.AuthHandler,
 	api.Handle("/reports/dry-run/{definition_id}",
 		authz.RequireRoleHandler(models.RoleEditor, http.HandlerFunc(report.DryRunReport)),
 	).Methods(http.MethodPost)
+
+	api.HandleFunc("/notifications", notification.List).Methods(http.MethodGet)
+	api.HandleFunc("/notifications/{notificationID}/read", notification.MarkRead).Methods(http.MethodPost)
 
 	return router
 }

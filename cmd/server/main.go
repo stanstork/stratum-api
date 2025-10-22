@@ -36,6 +36,7 @@ type application struct {
 	db             *sql.DB
 	temporalClient tc.Client
 	logger         zerolog.Logger
+	notifications  notification.Service
 }
 
 func main() {
@@ -68,6 +69,10 @@ func main() {
 	// Run database migrations.
 	migration.RunMigrations(cfg.DatabaseURL, logger)
 
+	// Initialize notification service.
+	notificationRepo := repository.NewNotificationRepository(db)
+	notificationService := notification.NewService(notificationRepo, logger)
+
 	// Initialize Temporal client.
 	temporalClient, err := tc.Dial(tc.Options{
 		Logger: temporalLogger,
@@ -83,6 +88,7 @@ func main() {
 		db:             db,
 		temporalClient: temporalClient,
 		logger:         logger,
+		notifications:  notificationService,
 	}
 
 	// Start the Temporal worker in a separate goroutine.
@@ -121,14 +127,15 @@ func (app *application) initRouter(logger zerolog.Logger) http.Handler {
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(app.db, app.config, logger)
-	jobHandler := handlers.NewJobHandler(jobRepo, app.temporalClient, logger)
+	jobHandler := handlers.NewJobHandler(jobRepo, app.temporalClient, app.notifications, logger)
 	connHandler := handlers.NewConnectionHandler(connRepo, app.config.Worker.EngineImage, logger)
 	metaHandler := handlers.NewMetadataHandler(connRepo, app.config.Worker.EngineImage, logger)
 	reportHandler := handlers.NewReportHandler(connRepo, jobRepo, app.config.Worker.EngineImage, logger)
 	tenantHandler := handlers.NewTenantHandler(tenantRepo, userRepo, logger)
 	inviteHandler := handlers.NewInviteHandler(inviteRepo, tenantRepo, userRepo, inviteMailer, app.config.Email.InviteURLTemplate, logger)
+	notificationHandler := handlers.NewNotificationHandler(app.notifications, logger)
 
-	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler, inviteHandler)
+	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler, inviteHandler, notificationHandler)
 }
 
 func (app *application) startTemporalWorker(logger zerolog.Logger) worker.Worker {
@@ -146,6 +153,7 @@ func (app *application) startTemporalWorker(logger zerolog.Logger) worker.Worker
 		TempDir:           app.config.Worker.TempDir,
 		ContainerCPULimit: app.config.Worker.ContainerCPULimit,
 		ContainerMemLimit: app.config.Worker.ContainerMemoryLimit,
+		Notifier:          app.notifications,
 	}
 
 	w := worker.New(app.temporalClient, temporal.TaskQueueName, worker.Options{})
