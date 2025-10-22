@@ -13,6 +13,8 @@ import (
 
 	"github.com/docker/docker/client"
 	h "github.com/gorilla/handlers"
+	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/config"
 	"github.com/stanstork/stratum-api/internal/handlers"
 	"github.com/stanstork/stratum-api/internal/middleware"
@@ -33,29 +35,45 @@ type application struct {
 	config         *config.Config
 	db             *sql.DB
 	temporalClient tc.Client
+	logger         zerolog.Logger
 }
 
 func main() {
+	// Set up structured, level-based logging.
+	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.Kitchen}
+	logger := zerolog.New(consoleWriter).With().Timestamp().Logger()
+
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	log.SetFlags(0)
+	log.SetOutput(logger)
+
+	temporalLogger := temporal.NewTemporalAdapter(logger)
+
+	gooseAdapter := migration.NewGooseAdapter(logger)
+	goose.SetLogger(gooseAdapter)
+
 	// Load configuration.
 	cfg := config.Load()
 
 	// Initialize database connection.
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		logger.Fatal().Err(err).Msg("Failed to connect to the database")
 	}
 	defer db.Close()
 	if err := db.Ping(); err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		logger.Fatal().Err(err).Msg("Failed to ping database")
 	}
 
 	// Run database migrations.
-	migration.RunMigrations(cfg.DatabaseURL)
+	migration.RunMigrations(cfg.DatabaseURL, logger)
 
 	// Initialize Temporal client.
-	temporalClient, err := tc.Dial(tc.Options{})
+	temporalClient, err := tc.Dial(tc.Options{
+		Logger: temporalLogger,
+	})
 	if err != nil {
-		log.Fatalf("Unable to create Temporal client: %v", err)
+		logger.Fatal().Err(err).Msg("Unable to create Temporal client")
 	}
 	defer temporalClient.Close()
 
@@ -64,14 +82,15 @@ func main() {
 		config:         cfg,
 		db:             db,
 		temporalClient: temporalClient,
+		logger:         logger,
 	}
 
 	// Start the Temporal worker in a separate goroutine.
-	temporalWorker := app.startTemporalWorker()
+	temporalWorker := app.startTemporalWorker(logger)
 
 	// Initialize the HTTP router and middleware.
-	router := app.initRouter()
-	loggedRouter := middleware.LoggingMiddleware(router)
+	router := app.initRouter(logger)
+	loggedRouter := middleware.LoggingMiddleware(app.logger)(router)
 	corsHandler := h.CORS(
 		h.AllowedOrigins([]string{"http://localhost:3000"}),
 		h.AllowedMethods([]string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),
@@ -80,13 +99,13 @@ func main() {
 	)(loggedRouter)
 
 	// Start the HTTP server and handle graceful shutdown.
-	app.startServer(corsHandler, temporalWorker)
+	app.startServer(corsHandler, temporalWorker, logger)
 
-	log.Println("Application terminated.")
+	logger.Info().Msg("Application terminated.")
 }
 
 // initRouter sets up all HTTP handlers and returns the router.
-func (app *application) initRouter() http.Handler {
+func (app *application) initRouter(logger zerolog.Logger) http.Handler {
 	// Repositories
 	jobRepo := repository.NewJobRepository(app.db)
 	connRepo := repository.NewConnectionRepository(app.db)
@@ -97,7 +116,7 @@ func (app *application) initRouter() http.Handler {
 	// Mailer for invites
 	inviteMailer, err := notification.NewSMTPInviteMailer(app.config.Email)
 	if err != nil {
-		log.Fatalf("failed to configure invite mailer: %v", err)
+		logger.Fatal().Err(err).Msg("failed to configure invite mailer")
 	}
 
 	// Handlers
@@ -112,10 +131,10 @@ func (app *application) initRouter() http.Handler {
 	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler, inviteHandler)
 }
 
-func (app *application) startTemporalWorker() worker.Worker {
+func (app *application) startTemporalWorker(logger zerolog.Logger) worker.Worker {
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Fatalf("Failed to create Docker client: %v", err)
+		logger.Fatal().Err(err).Msg("Failed to create Docker client")
 	}
 
 	activityImpl := &activities.Activities{
@@ -136,9 +155,9 @@ func (app *application) startTemporalWorker() worker.Worker {
 
 	// Start the worker in a goroutine so it doesn't block.
 	go func() {
-		log.Println("Starting Temporal worker...")
+		logger.Info().Msg("Starting Temporal worker...")
 		if err := w.Run(worker.InterruptCh()); err != nil {
-			log.Fatalf("Unable to start worker: %v", err)
+			logger.Fatal().Err(err).Msg("Unable to start worker")
 		}
 	}()
 
@@ -146,7 +165,7 @@ func (app *application) startTemporalWorker() worker.Worker {
 }
 
 // startServer launches the HTTP server and handles graceful shutdown.
-func (app *application) startServer(handler http.Handler, temporalWorker worker.Worker) {
+func (app *application) startServer(handler http.Handler, temporalWorker worker.Worker, logger zerolog.Logger) {
 	server := &http.Server{
 		Addr:    ":" + app.config.ServerPort,
 		Handler: handler,
@@ -155,7 +174,7 @@ func (app *application) startServer(handler http.Handler, temporalWorker worker.
 	// Channel to listen for server errors
 	serverErrCh := make(chan error, 1)
 	go func() {
-		log.Printf("Server listening on %s", server.Addr)
+		logger.Info().Msgf("Server listening on %s", server.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrCh <- err
 		}
@@ -167,22 +186,22 @@ func (app *application) startServer(handler http.Handler, temporalWorker worker.
 
 	select {
 	case sig := <-quit:
-		log.Printf("Received signal: %s. Shutting down...", sig)
+		logger.Info().Msgf("Received signal: %s. Shutting down...", sig)
 	case err := <-serverErrCh:
-		log.Printf("Server error: %v. Shutting down...", err)
+		logger.Error().Err(err).Msg("Server error occurred")
 	}
 
 	// Gracefully shut down the HTTP server.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("HTTP server shutdown error: %v", err)
+		logger.Error().Err(err).Msg("HTTP server shutdown error")
 	} else {
-		log.Println("HTTP server shutdown complete.")
+		logger.Info().Msg("HTTP server shutdown complete.")
 	}
 
 	// Stop the Temporal worker.
-	log.Println("Stopping Temporal worker...")
+	logger.Info().Msg("Stopping Temporal worker...")
 	temporalWorker.Stop()
-	log.Println("Temporal worker stopped.")
+	logger.Info().Msg("Temporal worker stopped.")
 }
