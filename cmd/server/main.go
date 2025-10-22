@@ -120,13 +120,13 @@ func (app *application) initRouter(logger zerolog.Logger) http.Handler {
 	}
 
 	// Handlers
-	authHandler := handlers.NewAuthHandler(app.db, app.config)
-	jobHandler := handlers.NewJobHandler(jobRepo, app.temporalClient)
-	connHandler := handlers.NewConnectionHandler(connRepo, app.config.Worker.EngineImage)
-	metaHandler := handlers.NewMetadataHandler(connRepo, app.config.Worker.EngineImage)
-	reportHandler := handlers.NewReportHandler(connRepo, jobRepo, app.config.Worker.EngineImage)
-	tenantHandler := handlers.NewTenantHandler(tenantRepo, userRepo)
-	inviteHandler := handlers.NewInviteHandler(inviteRepo, tenantRepo, userRepo, inviteMailer, app.config.Email.InviteURLTemplate)
+	authHandler := handlers.NewAuthHandler(app.db, app.config, logger)
+	jobHandler := handlers.NewJobHandler(jobRepo, app.temporalClient, logger)
+	connHandler := handlers.NewConnectionHandler(connRepo, app.config.Worker.EngineImage, logger)
+	metaHandler := handlers.NewMetadataHandler(connRepo, app.config.Worker.EngineImage, logger)
+	reportHandler := handlers.NewReportHandler(connRepo, jobRepo, app.config.Worker.EngineImage, logger)
+	tenantHandler := handlers.NewTenantHandler(tenantRepo, userRepo, logger)
+	inviteHandler := handlers.NewInviteHandler(inviteRepo, tenantRepo, userRepo, inviteMailer, app.config.Email.InviteURLTemplate, logger)
 
 	return routes.NewRouter(authHandler, jobHandler, connHandler, metaHandler, reportHandler, tenantHandler, inviteHandler)
 }

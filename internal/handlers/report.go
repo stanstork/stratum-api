@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/gorilla/mux"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/engine"
 	"github.com/stanstork/stratum-api/internal/repository"
@@ -27,17 +28,18 @@ type ReportHandler struct {
 	conn         repository.ConnectionRepository
 	job          repository.JobRepository
 	engineClient *engine.Client
+	logger       zerolog.Logger
 }
 
-func NewReportHandler(conn repository.ConnectionRepository, job repository.JobRepository, containerName string) *ReportHandler {
+func NewReportHandler(conn repository.ConnectionRepository, job repository.JobRepository, containerName string, logger zerolog.Logger) *ReportHandler {
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		panic("Failed to create Docker client: " + err.Error())
+		logger.Fatal().Err(err).Msg("Failed to create Docker client")
 	}
 
 	dr := engine.NewDockerRunner(dockerClient)
 	engineClient := engine.NewClient(dr, containerName)
-	return &ReportHandler{conn: conn, job: job, engineClient: engineClient}
+	return &ReportHandler{conn: conn, job: job, engineClient: engineClient, logger: logger}
 }
 
 func (h *ReportHandler) DryRunReport(w http.ResponseWriter, r *http.Request) {

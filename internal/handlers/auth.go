@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/config"
 	"github.com/stanstork/stratum-api/internal/models"
@@ -17,6 +18,7 @@ import (
 type AuthHandler struct {
 	userRepository repository.UserRepository
 	jwtSecret      string
+	logger         zerolog.Logger
 }
 
 type signupRequest struct {
@@ -32,10 +34,11 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-func NewAuthHandler(db *sql.DB, cfg *config.Config) *AuthHandler {
+func NewAuthHandler(db *sql.DB, cfg *config.Config, logger zerolog.Logger) *AuthHandler {
 	return &AuthHandler{
 		userRepository: repository.NewUserRepository(db),
 		jwtSecret:      cfg.JWTSecret,
+		logger:         logger,
 	}
 }
 

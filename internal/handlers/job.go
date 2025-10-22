@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/repository"
@@ -25,6 +26,7 @@ import (
 type JobHandler struct {
 	repo           repository.JobRepository
 	temporalClient tc.Client
+	logger         zerolog.Logger
 }
 
 type createDefinitionPayload struct {
@@ -66,10 +68,11 @@ type resolvedDefinition struct {
 	ProgressSnapshot        json.RawMessage
 }
 
-func NewJobHandler(repo repository.JobRepository, temporalClient tc.Client) *JobHandler {
+func NewJobHandler(repo repository.JobRepository, temporalClient tc.Client, logger zerolog.Logger) *JobHandler {
 	return &JobHandler{
 		repo:           repo,
 		temporalClient: temporalClient,
+		logger:         logger,
 	}
 }
 

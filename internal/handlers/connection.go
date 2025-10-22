@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"regexp"
 
 	"github.com/docker/docker/client"
 	"github.com/gorilla/mux"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/engine"
 	"github.com/stanstork/stratum-api/internal/models"
@@ -27,17 +27,18 @@ type ConnectionHandler struct {
 	repo          repository.ConnectionRepository
 	engineClient  *engine.Client
 	containerName string
+	logger        zerolog.Logger
 }
 
-func NewConnectionHandler(repo repository.ConnectionRepository, containerName string) *ConnectionHandler {
+func NewConnectionHandler(repo repository.ConnectionRepository, containerName string, logger zerolog.Logger) *ConnectionHandler {
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		panic("Failed to create Docker client: " + err.Error())
+		logger.Fatal().Err(err).Msg("Failed to create Docker client")
 	}
 
 	dr := engine.NewDockerRunner(dockerClient)
 	cli := engine.NewClient(dr, containerName)
-	return &ConnectionHandler{engineClient: cli, containerName: containerName, repo: repo}
+	return &ConnectionHandler{engineClient: cli, containerName: containerName, repo: repo, logger: logger}
 }
 
 func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +49,7 @@ func (h *ConnectionHandler) TestConnection(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Format == "" || req.DSN == "" {
-		log.Println("Format and DSN are required for testing connection")
+		h.logger.Warn().Msg("Format and DSN are required for testing connection")
 		http.Error(w, "Format and DSN are required", http.StatusBadRequest)
 		return
 	}
@@ -82,19 +83,19 @@ func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Re
 			http.Error(w, "Connection not found", http.StatusNotFound)
 			return
 		}
-		log.Printf("Failed to get connection with ID %s: %v", id, err)
+		h.logger.Error().Err(err).Msgf("Failed to get connection with ID %s", id)
 		http.Error(w, "Failed to get connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if conn == nil {
-		log.Printf("Connection with ID %s not found", id)
+		h.logger.Warn().Msgf("Connection with ID %s not found", id)
 		http.Error(w, "Connection not found", http.StatusNotFound)
 		return
 	}
 
 	conn_str, err := conn.GenerateConnString()
 	if err != nil {
-		log.Printf("Failed to generate connection string for %s: %v", id, err)
+		h.logger.Error().Err(err).Msgf("Failed to generate connection string for %s", id)
 		http.Error(w, "Failed to generate connection string: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -109,7 +110,7 @@ func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Re
 		resp["status"] = "ok"
 	}
 
-	log.Printf("Tested connection %s: %s", id, resp["logs"])
+	h.logger.Info().Msgf("Tested connection %s: %s", id, resp["logs"])
 
 	if resp["status"] == "ok" {
 		conn.Status = "valid"
@@ -118,7 +119,7 @@ func (h *ConnectionHandler) TestConnectionByID(w http.ResponseWriter, r *http.Re
 	}
 	_, err = h.repo.Update(conn)
 	if err != nil {
-		log.Printf("Failed to update connection status for %s: %v", id, err)
+		h.logger.Error().Err(err).Msgf("Failed to update connection status for %s", id)
 		http.Error(w, "Failed to update connection status: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -192,7 +193,7 @@ func (h *ConnectionHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	createdConn, err := h.repo.Create(&conn)
 	if err != nil {
-		log.Printf("Failed to create connection: %v", err)
+		h.logger.Error().Err(err).Msg("Failed to create connection")
 		http.Error(w, "Failed to create connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

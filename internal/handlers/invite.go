@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/notification"
@@ -29,6 +30,7 @@ type InviteHandler struct {
 	tokenTTL   time.Duration
 	mailer     notification.InviteMailer
 	urlTpl     string
+	logger     zerolog.Logger
 }
 
 type inviteRequest struct {
@@ -43,6 +45,7 @@ func NewInviteHandler(
 	userRepo repository.UserRepository,
 	mailer notification.InviteMailer,
 	inviteURLTemplate string,
+	logger zerolog.Logger,
 ) *InviteHandler {
 	if inviteURLTemplate == "" {
 		inviteURLTemplate = "https://app.stratum.dev/invite/accept?token=%s"
@@ -54,6 +57,7 @@ func NewInviteHandler(
 		tokenTTL:   defaultInviteTTL,
 		mailer:     mailer,
 		urlTpl:     inviteURLTemplate,
+		logger:     logger,
 	}
 }
 

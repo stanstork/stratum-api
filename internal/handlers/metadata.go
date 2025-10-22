@@ -9,6 +9,7 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/gorilla/mux"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/engine"
 	"github.com/stanstork/stratum-api/internal/repository"
@@ -18,14 +19,15 @@ type MetadataHandler struct {
 	repo          repository.ConnectionRepository
 	dockerClient  *client.Client
 	containerName string
+	logger        zerolog.Logger
 }
 
-func NewMetadataHandler(repo repository.ConnectionRepository, containerName string) *MetadataHandler {
+func NewMetadataHandler(repo repository.ConnectionRepository, containerName string, logger zerolog.Logger) *MetadataHandler {
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		panic("Failed to create Docker client: " + err.Error())
+		logger.Fatal().Err(err).Msg("Failed to create Docker client")
 	}
-	return &MetadataHandler{repo: repo, dockerClient: dockerClient, containerName: containerName}
+	return &MetadataHandler{repo: repo, dockerClient: dockerClient, containerName: containerName, logger: logger}
 }
 
 func (h *MetadataHandler) GetSourceMetadata(w http.ResponseWriter, r *http.Request) {

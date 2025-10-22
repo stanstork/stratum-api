@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/rs/zerolog"
 	"github.com/stanstork/stratum-api/internal/authz"
 	"github.com/stanstork/stratum-api/internal/models"
 	"github.com/stanstork/stratum-api/internal/repository"
@@ -16,6 +17,7 @@ import (
 type TenantHandler struct {
 	tenantRepo repository.TenantRepository
 	userRepo   repository.UserRepository
+	logger     zerolog.Logger
 }
 
 type tenantUserResponse struct {
@@ -28,10 +30,11 @@ type tenantUserResponse struct {
 	Roles     []models.UserRole `json:"roles"`
 }
 
-func NewTenantHandler(tenantRepo repository.TenantRepository, userRepo repository.UserRepository) *TenantHandler {
+func NewTenantHandler(tenantRepo repository.TenantRepository, userRepo repository.UserRepository, logger zerolog.Logger) *TenantHandler {
 	return &TenantHandler{
 		tenantRepo: tenantRepo,
 		userRepo:   userRepo,
+		logger:     logger,
 	}
 }
 
