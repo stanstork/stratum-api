@@ -71,7 +71,12 @@ func main() {
 
 	// Initialize notification service.
 	notificationRepo := repository.NewNotificationRepository(db)
-	notificationService := notification.NewService(notificationRepo, logger)
+	emailNotifier, emailErr := notification.NewEmailNotifier(cfg.Email, logger)
+	if emailErr != nil {
+		logger.Error().Err(emailErr).Msg("failed to configure email notifier")
+	}
+	firebaseNotifier := notification.NewFirebaseNotifier(cfg.Firebase, logger)
+	notificationService := notification.NewService(notificationRepo, logger, emailNotifier, firebaseNotifier)
 
 	// Initialize Temporal client.
 	temporalClient, err := tc.Dial(tc.Options{

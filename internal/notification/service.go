@@ -30,14 +30,22 @@ type Service interface {
 }
 
 type service struct {
-	repo   repository.NotificationRepository
-	logger zerolog.Logger
+	repo      repository.NotificationRepository
+	logger    zerolog.Logger
+	notifiers []Notifier
 }
 
-func NewService(repo repository.NotificationRepository, logger zerolog.Logger) Service {
+func NewService(repo repository.NotificationRepository, logger zerolog.Logger, notifiers ...Notifier) Service {
+	active := make([]Notifier, 0, len(notifiers))
+	for _, notifier := range notifiers {
+		if notifier != nil {
+			active = append(active, notifier)
+		}
+	}
 	return &service{
-		repo:   repo,
-		logger: logger.With().Str("component", "notification_service").Logger(),
+		repo:      repo,
+		logger:    logger.With().Str("component", "notification_service").Logger(),
+		notifiers: active,
 	}
 }
 
@@ -68,6 +76,11 @@ func (s *service) Publish(ctx context.Context, evt Event) (models.Notification, 
 	if err != nil {
 		s.logger.Error().Err(err).Str("event_type", string(evt.Event)).Msg("failed to persist notification")
 		return models.Notification{}, err
+	}
+	for _, notifier := range s.notifiers {
+		if err := notifier.Notify(ctx, notif); err != nil {
+			logNotifyError(s.logger, err, notifierChannelName(notifier), notif)
+		}
 	}
 	return notif, nil
 }
@@ -175,4 +188,14 @@ func fallbackName(name, fallback string) string {
 		return trimmed
 	}
 	return fallback
+}
+
+func notifierChannelName(n Notifier) string {
+	type named interface {
+		String() string
+	}
+	if v, ok := n.(named); ok {
+		return v.String()
+	}
+	return fmt.Sprintf("%T", n)
 }

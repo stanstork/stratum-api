@@ -17,20 +17,28 @@ type WorkerConfig struct {
 }
 
 type Config struct {
-	DatabaseURL string       `mapstructure:"database_url"`
-	ServerPort  string       `mapstructure:"server_port"`
-	JWTSecret   string       `mapstructure:"jwt_secret"`
-	Worker      WorkerConfig `mapstructure:"worker"`
-	Email       EmailConfig  `mapstructure:"email"`
+	DatabaseURL string         `mapstructure:"database_url"`
+	ServerPort  string         `mapstructure:"server_port"`
+	JWTSecret   string         `mapstructure:"jwt_secret"`
+	Worker      WorkerConfig   `mapstructure:"worker"`
+	Email       EmailConfig    `mapstructure:"email"`
+	Firebase    FirebaseConfig `mapstructure:"firebase"`
 }
 
 type EmailConfig struct {
-	From              string `mapstructure:"from"`
-	SMTPHost          string `mapstructure:"smtp_host"`
-	SMTPPort          int    `mapstructure:"smtp_port"`
-	Username          string `mapstructure:"username"`
-	Password          string `mapstructure:"password"`
-	InviteURLTemplate string `mapstructure:"invite_url_template"`
+	From              string   `mapstructure:"from"`
+	SMTPHost          string   `mapstructure:"smtp_host"`
+	SMTPPort          int      `mapstructure:"smtp_port"`
+	Username          string   `mapstructure:"username"`
+	Password          string   `mapstructure:"password"`
+	InviteURLTemplate string   `mapstructure:"invite_url_template"`
+	AlertRecipients   []string `mapstructure:"alert_recipients"`
+}
+
+type FirebaseConfig struct {
+	Enabled   bool   `mapstructure:"enabled"`
+	ProjectID string `mapstructure:"project_id"`
+	Topic     string `mapstructure:"topic"`
 }
 
 // Load reads the configuration from a YAML file and returns a Config instance.
