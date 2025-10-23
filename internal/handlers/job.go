@@ -428,7 +428,7 @@ func (h *JobHandler) RunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jobDefID := mux.Vars(r)["jobID"]
-	execID := uuid.NewString()
+	execID := uuid.New().String()
 
 	// Set up the workflow options.
 	workflowOptions := tc.StartWorkflowOptions{

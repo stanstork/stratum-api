@@ -23,10 +23,6 @@ type EmailNotifier struct {
 
 func NewEmailNotifier(cfg config.EmailConfig, logger zerolog.Logger) (*EmailNotifier, error) {
 	recipients := sanitizeRecipients(cfg.AlertRecipients)
-	if len(recipients) == 0 {
-		return nil, nil
-	}
-
 	host := strings.TrimSpace(cfg.SMTPHost)
 	from := strings.TrimSpace(cfg.From)
 	if host == "" {
